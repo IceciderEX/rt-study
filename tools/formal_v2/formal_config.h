@@ -19,6 +19,8 @@ struct FormalConfig {
     std::string summary_csv = "./results/formal_v2/summary/formal_summary.csv";
     std::string events_csv = "./results/formal_v2/summary/formal_events.csv";
     std::string phases_csv = "./results/formal_v2/summary/formal_phases.csv";
+    std::string windows_csv = "./results/formal_v2/summary/controller_windows.csv";
+    std::string actions_csv = "./results/formal_v2/summary/controller_actions.csv";
 
     std::string trace_dir = "./traces/formal_v2/small_dynamic_500k_limit";
 
@@ -31,14 +33,31 @@ struct FormalConfig {
     uint32_t memtable_max_range_deletions = 0; // 0 = disabled, 64, 128, 256, 512, 1024, 2048
     uint32_t memtable_op_scan_flush_trigger = 0; // Fixed 0 (DISABLED) to prevent confounding
 
-    // Experimental Range Tombstone Controller. These options are independent
-    // of the native fixed threshold above. Keep the native threshold at zero
-    // when evaluating the controller so that a flush has one clear cause.
+    // Experimental Range Tombstone Controller V1 (Legacy)
     bool enable_range_tombstone_controller = false;
     bool range_tombstone_controller_observe_only = true;
     uint32_t range_tombstone_controller_min_range_deletions = 512;
     uint64_t range_tombstone_controller_min_memtable_bytes = 8 * 1024 * 1024;
     uint64_t range_tombstone_controller_cooldown_micros = 1000000;
+
+    // RTP-MC V2: Range Tombstone Pressure–Maintenance Coordinator
+    std::string rtp_mc_mode = "disabled"; // "disabled", "observe", "shadow", "active_v2a", "active_v2b"
+    uint64_t control_epoch_ms = 50;
+    uint64_t range_del_checkpoint = 128;
+    uint64_t min_scan_samples = 20;
+    uint64_t min_get_samples = 50;
+    double scan_slo_us = 500.0;
+    double getlive_slo_us = 200.0;
+    double put_slo_us = 150.0;
+    int l0_soft_limit = 4;
+    int l0_hard_limit = 8;
+    uint64_t pending_compaction_soft_bytes = 64 * 1024 * 1024;
+    uint64_t pending_compaction_hard_bytes = 256 * 1024 * 1024;
+    uint64_t max_tombstone_residency_ms = 5000;
+    uint64_t max_range_del_deadman = 2048;
+    uint64_t capacity_flush_imminent_ms = 200;
+    double read_critical_multiplier = 2.0;
+    int read_critical_consecutive_windows = 3;
 
     // RocksDB Engine Tuning
     size_t write_buffer_size = 64 * 1024 * 1024;
@@ -87,6 +106,8 @@ struct FormalConfig {
             else if (key == "summary_csv") summary_csv = val;
             else if (key == "events_csv") events_csv = val;
             else if (key == "phases_csv") phases_csv = val;
+            else if (key == "windows_csv") windows_csv = val;
+            else if (key == "actions_csv") actions_csv = val;
             else if (key == "trace_dir") trace_dir = val;
             else if (key == "total_keys") total_keys = std::stoull(val);
             else if (key == "value_size") value_size = std::stoul(val);
@@ -98,6 +119,23 @@ struct FormalConfig {
             else if (key == "range_tombstone_controller_min_range_deletions") range_tombstone_controller_min_range_deletions = static_cast<uint32_t>(std::stoul(val));
             else if (key == "range_tombstone_controller_min_memtable_bytes") range_tombstone_controller_min_memtable_bytes = std::stoull(val);
             else if (key == "range_tombstone_controller_cooldown_micros") range_tombstone_controller_cooldown_micros = std::stoull(val);
+            else if (key == "rtp_mc_mode") rtp_mc_mode = val;
+            else if (key == "control_epoch_ms") control_epoch_ms = std::stoull(val);
+            else if (key == "range_del_checkpoint") range_del_checkpoint = std::stoull(val);
+            else if (key == "min_scan_samples") min_scan_samples = std::stoull(val);
+            else if (key == "min_get_samples") min_get_samples = std::stoull(val);
+            else if (key == "scan_slo_us") scan_slo_us = std::stod(val);
+            else if (key == "getlive_slo_us") getlive_slo_us = std::stod(val);
+            else if (key == "put_slo_us") put_slo_us = std::stod(val);
+            else if (key == "l0_soft_limit") l0_soft_limit = std::stoi(val);
+            else if (key == "l0_hard_limit") l0_hard_limit = std::stoi(val);
+            else if (key == "pending_compaction_soft_bytes") pending_compaction_soft_bytes = std::stoull(val);
+            else if (key == "pending_compaction_hard_bytes") pending_compaction_hard_bytes = std::stoull(val);
+            else if (key == "max_tombstone_residency_ms") max_tombstone_residency_ms = std::stoull(val);
+            else if (key == "max_range_del_deadman") max_range_del_deadman = std::stoull(val);
+            else if (key == "capacity_flush_imminent_ms") capacity_flush_imminent_ms = std::stoull(val);
+            else if (key == "read_critical_multiplier") read_critical_multiplier = std::stod(val);
+            else if (key == "read_critical_consecutive_windows") read_critical_consecutive_windows = std::stoi(val);
             else if (key == "random_seed") random_seed = std::stoull(val);
             else if (key == "write_buffer_size") write_buffer_size = std::stoull(val);
             else if (key == "block_cache_size") block_cache_size = std::stoull(val);

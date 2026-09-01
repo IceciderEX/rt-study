@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include <functional>
 
 #include "rocksdb/listener.h"
 #include "rocksdb/db.h"
@@ -94,6 +95,11 @@ public:
         verification_start_time_ = std::chrono::steady_clock::now();
     }
 
+    void SetFlushCompletedCallback(std::function<void(uint64_t)> cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_flush_completed_cb_ = cb;
+    }
+
     // Ultra-lightweight callback: zero filesystem I/O, zero string conversions
     void OnFlushCompleted(rocksdb::DB* /*db*/, const rocksdb::FlushJobInfo& info) override {
         auto now = std::chrono::steady_clock::now();
@@ -102,33 +108,41 @@ public:
             info.table_properties.data_size : 
             (info.table_properties.raw_key_size + info.table_properties.raw_value_size);
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        double elapsed = 0.0;
-        if (current_stage_ == EventStage::kPreload) {
-            elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - init_time_).count();
-        } else if (current_stage_ == EventStage::kForeground) {
-            elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
-            fg_flush_bytes_ += out_bytes;
-        } else if (current_stage_ == EventStage::kCooldown) {
-            elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
-            cooldown_flush_bytes_ += out_bytes;
-        } else { // kVerification
-            elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
-            ver_flush_bytes_ += out_bytes;
+        std::function<void(uint64_t)> cb_copy;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            
+            double elapsed = 0.0;
+            if (current_stage_ == EventStage::kPreload) {
+                elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - init_time_).count();
+            } else if (current_stage_ == EventStage::kForeground) {
+                elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
+                fg_flush_bytes_ += out_bytes;
+            } else if (current_stage_ == EventStage::kCooldown) {
+                elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
+                cooldown_flush_bytes_ += out_bytes;
+            } else { // kVerification
+                elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
+                ver_flush_bytes_ += out_bytes;
+            }
+
+            RawFlushEvent rec;
+            rec.job_id = info.job_id;
+            rec.stage = current_stage_;
+            rec.flush_reason = info.flush_reason;
+            rec.smallest_seqno = info.smallest_seqno;
+            rec.largest_seqno = info.largest_seqno;
+            rec.engine_out_bytes = out_bytes;
+            rec.timestamp_sec = elapsed;
+            rec.file_path = info.file_path;
+
+            events_flush_.push_back(rec);
+            cb_copy = on_flush_completed_cb_;
         }
 
-        RawFlushEvent rec;
-        rec.job_id = info.job_id;
-        rec.stage = current_stage_;
-        rec.flush_reason = info.flush_reason;
-        rec.smallest_seqno = info.smallest_seqno;
-        rec.largest_seqno = info.largest_seqno;
-        rec.engine_out_bytes = out_bytes;
-        rec.timestamp_sec = elapsed;
-        rec.file_path = info.file_path;
-
-        events_flush_.push_back(rec);
+        if (cb_copy) {
+            cb_copy(out_bytes);
+        }
     }
 
     // Ultra-lightweight callback: zero filesystem I/O, zero string conversions
@@ -315,6 +329,8 @@ private:
     uint64_t ver_flush_bytes_;
     uint64_t ver_compaction_read_bytes_;
     uint64_t ver_compaction_write_bytes_;
+
+    std::function<void(uint64_t)> on_flush_completed_cb_;
 };
 
 } // namespace study::formal

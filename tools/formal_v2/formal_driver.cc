@@ -26,6 +26,7 @@
 #include "formal_event_listener.h"
 #include "worker_state_model.h"
 #include "kv_verifier.h"
+#include "rtp_mc_controller.h"
 
 using namespace study::formal;
 
@@ -318,6 +319,19 @@ public:
         experiment_failed_.store(false);
         db_stats_->Reset();
 
+        // Instantiate Double-buffered bundles for RTP-MC V2
+        std::vector<std::unique_ptr<WorkerHistogramBundle>> worker_rtp_bundles;
+        for (int w = 0; w < num_workers_; ++w) {
+            worker_rtp_bundles.push_back(std::make_unique<WorkerHistogramBundle>());
+        }
+
+        auto rtp_controller = std::make_unique<RtpMcController>(
+            db_.get(), config_, config_.exp_id, worker_rtp_bundles, event_listener_);
+        event_listener_->SetFlushCompletedCallback([&](uint64_t out_bytes) {
+            rtp_controller->NotifyFlushCompleted(out_bytes);
+        });
+        rtp_controller->Start();
+
         // Switch EventListener stage to FOREGROUND
         event_listener_->StartForegroundExperiment();
         auto fg_wallclock_t0 = std::chrono::steady_clock::now();
@@ -366,6 +380,7 @@ public:
 
         std::vector<std::thread> workers;
         workers.reserve(num_workers_);
+        static std::atomic<uint64_t> global_del_ops{0};
 
         for (int w = 0; w < num_workers_; ++w) {
             uint64_t w_end = worker_ranges_[w].second;
@@ -401,10 +416,12 @@ public:
                             uint64_t lat_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
                             if ((op.flags & 1) != 0) {
                                 stats.hist_get_del.Record(lat_ns);
+                                worker_rtp_bundles[w]->hist_get_del.Record(lat_ns);
                                 if (op.flags & 2) stats.sub_inj.hist_get_del.Record(lat_ns);
                                 if (op.flags & 4) stats.sub_post.hist_get_del.Record(lat_ns);
                             } else {
                                 stats.hist_get_live.Record(lat_ns);
+                                worker_rtp_bundles[w]->hist_get_live.Record(lat_ns);
                                 if (op.flags & 2) stats.sub_inj.hist_get_live.Record(lat_ns);
                                 if (op.flags & 4) stats.sub_post.hist_get_live.Record(lat_ns);
                             }
@@ -462,10 +479,12 @@ public:
 
                             uint64_t lat_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
                             stats.hist_scan.Record(lat_ns);
+                            worker_rtp_bundles[w]->hist_scan.Record(lat_ns);
                             stats.scan_keys_found += keys_found;
 
                             if ((op.flags & 1) != 0) {
                                 stats.hist_scan_intersect.Record(lat_ns);
+                                worker_rtp_bundles[w]->hist_scan_intersect.Record(lat_ns);
                                 if (op.flags & 2) stats.sub_inj.hist_scan_intersect.Record(lat_ns);
                                 if (op.flags & 4) stats.sub_post.hist_scan_intersect.Record(lat_ns);
                             } else {
@@ -508,6 +527,7 @@ public:
 
                             uint64_t lat_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
                             stats.hist_put.Record(lat_ns);
+                            worker_rtp_bundles[w]->hist_put.Record(lat_ns);
                             if (op.flags & 2) stats.sub_inj.hist_put.Record(lat_ns);
                             if (op.flags & 4) stats.sub_post.hist_put.Record(lat_ns);
 
@@ -541,6 +561,10 @@ public:
                             }
                             model.ApplyDeleteRange(op.key1, op.key2);
                             stats.db_api_calls++;
+
+                            if ((global_del_ops.fetch_add(1, std::memory_order_relaxed) + 1) % config_.range_del_checkpoint == 0) {
+                                rtp_controller->NotifyDeleteRangeCheckpoint();
+                            }
                         } else if (op.op_type == 4) { // No-op
                             // Functional Clean Baseline
                         }
@@ -569,6 +593,7 @@ public:
 
         for (int p = 0; p < 3; ++p) {
             std::cout << "[Coordinator] Phase " << p << " (" << phase_names[p] << ") released at exact T0...\n";
+            rtp_controller->SetCurrentPhase(p);
             auto p_t0 = std::chrono::steady_clock::now();
 
             // Release all workers simultaneously
@@ -705,6 +730,8 @@ public:
             if (w.joinable()) w.join();
         }
 
+        rtp_controller->Stop();
+
         auto fg_wallclock_t1 = std::chrono::steady_clock::now();
         double foreground_wallclock_sec = std::chrono::duration_cast<std::chrono::duration<double>>(fg_wallclock_t1 - fg_wallclock_t0).count();
 
@@ -824,7 +851,7 @@ public:
         bool summary_header = !std::filesystem::exists(config_.summary_csv);
         std::ofstream fsum(config_.summary_csv, std::ios::app);
         if (summary_header) {
-            fsum << "exp_id,group_name,desc,threshold,range_tombstone_controller_enabled,range_tombstone_controller_observe_only,range_tombstone_controller_min_range_deletions,range_tombstone_controller_min_memtable_bytes,range_tombstone_controller_cooldown_micros,total_keys,value_size,foreground_wallclock_sec,sum_phase_active_sec,oracle_flush_wait_sec,"
+            fsum << "exp_id,group_name,desc,threshold,range_tombstone_controller_enabled,range_tombstone_controller_observe_only,range_tombstone_controller_min_range_deletions,range_tombstone_controller_min_memtable_bytes,range_tombstone_controller_cooldown_micros,rtp_mc_mode,rtp_mc_windows,rtp_mc_seals,rtp_mc_conflicts,total_keys,value_size,foreground_wallclock_sec,sum_phase_active_sec,oracle_flush_wait_sec,"
                  << "fg_trace_iops,fg_db_api_iops,scan_us_per_key,scan_p99_us,get_live_p99_us,get_del_p99_us,put_p99_us,"
                  << "scan_limit_truncated_count,"
                  << "fg_flush_count,controller_fg_flush_count,fg_flush_engine_out_mb,fg_comp_read_mb,fg_comp_write_mb,fwa_val_norm_fg,cwa_val_norm_fg,pwa_val_norm_fg,"
@@ -838,6 +865,10 @@ public:
              << config_.range_tombstone_controller_min_range_deletions << ","
              << config_.range_tombstone_controller_min_memtable_bytes << ","
              << config_.range_tombstone_controller_cooldown_micros << ","
+             << config_.rtp_mc_mode << ","
+             << rtp_controller->GetTotalWindowsLogged() << ","
+             << rtp_controller->GetTotalSealsTriggered() << ","
+             << rtp_controller->GetTotalConflictsLogged() << ","
              << config_.total_keys << "," << config_.value_size << ","
              << std::fixed << std::setprecision(4) << foreground_wallclock_sec << ","
              << sum_phase_active_sec << ","
@@ -916,6 +947,14 @@ int main(int argc, char* argv[]) {
         else if (arg == "--range_tombstone_controller_min_range_deletions" && i + 1 < argc) config.range_tombstone_controller_min_range_deletions = static_cast<uint32_t>(std::stoul(argv[++i]));
         else if (arg == "--range_tombstone_controller_min_memtable_bytes" && i + 1 < argc) config.range_tombstone_controller_min_memtable_bytes = std::stoull(argv[++i]);
         else if (arg == "--range_tombstone_controller_cooldown_micros" && i + 1 < argc) config.range_tombstone_controller_cooldown_micros = std::stoull(argv[++i]);
+        else if (arg == "--rtp_mc_mode" && i + 1 < argc) config.rtp_mc_mode = argv[++i];
+        else if (arg == "--windows_csv" && i + 1 < argc) config.windows_csv = argv[++i];
+        else if (arg == "--actions_csv" && i + 1 < argc) config.actions_csv = argv[++i];
+        else if (arg == "--control_epoch_ms" && i + 1 < argc) config.control_epoch_ms = std::stoull(argv[++i]);
+        else if (arg == "--range_del_checkpoint" && i + 1 < argc) config.range_del_checkpoint = std::stoull(argv[++i]);
+        else if (arg == "--scan_slo_us" && i + 1 < argc) config.scan_slo_us = std::stod(argv[++i]);
+        else if (arg == "--getlive_slo_us" && i + 1 < argc) config.getlive_slo_us = std::stod(argv[++i]);
+        else if (arg == "--put_slo_us" && i + 1 < argc) config.put_slo_us = std::stod(argv[++i]);
         else if (arg == "--write_buffer_size" && i + 1 < argc) config.write_buffer_size = std::stoull(argv[++i]);
         else if (arg == "--oracle_flush_after_phase_b") config.oracle_flush_after_phase_b = true;
     }
@@ -935,6 +974,8 @@ int main(int argc, char* argv[]) {
             else if (arg == "--summary_csv" && i + 1 < argc) config.summary_csv = argv[++i];
             else if (arg == "--events_csv" && i + 1 < argc) config.events_csv = argv[++i];
             else if (arg == "--phases_csv" && i + 1 < argc) config.phases_csv = argv[++i];
+            else if (arg == "--windows_csv" && i + 1 < argc) config.windows_csv = argv[++i];
+            else if (arg == "--actions_csv" && i + 1 < argc) config.actions_csv = argv[++i];
             else if (arg == "--trace_dir" && i + 1 < argc) config.trace_dir = argv[++i];
             else if (arg == "--total_keys" && i + 1 < argc) config.total_keys = std::stoull(argv[++i]);
             else if (arg == "--value_size" && i + 1 < argc) config.value_size = std::stoull(argv[++i]);
@@ -946,6 +987,12 @@ int main(int argc, char* argv[]) {
             else if (arg == "--range_tombstone_controller_min_range_deletions" && i + 1 < argc) config.range_tombstone_controller_min_range_deletions = static_cast<uint32_t>(std::stoul(argv[++i]));
             else if (arg == "--range_tombstone_controller_min_memtable_bytes" && i + 1 < argc) config.range_tombstone_controller_min_memtable_bytes = std::stoull(argv[++i]);
             else if (arg == "--range_tombstone_controller_cooldown_micros" && i + 1 < argc) config.range_tombstone_controller_cooldown_micros = std::stoull(argv[++i]);
+            else if (arg == "--rtp_mc_mode" && i + 1 < argc) config.rtp_mc_mode = argv[++i];
+            else if (arg == "--control_epoch_ms" && i + 1 < argc) config.control_epoch_ms = std::stoull(argv[++i]);
+            else if (arg == "--range_del_checkpoint" && i + 1 < argc) config.range_del_checkpoint = std::stoull(argv[++i]);
+            else if (arg == "--scan_slo_us" && i + 1 < argc) config.scan_slo_us = std::stod(argv[++i]);
+            else if (arg == "--getlive_slo_us" && i + 1 < argc) config.getlive_slo_us = std::stod(argv[++i]);
+            else if (arg == "--put_slo_us" && i + 1 < argc) config.put_slo_us = std::stod(argv[++i]);
             else if (arg == "--write_buffer_size" && i + 1 < argc) config.write_buffer_size = std::stoull(argv[++i]);
             else if (arg == "--oracle_flush_after_phase_b") config.oracle_flush_after_phase_b = true;
         }

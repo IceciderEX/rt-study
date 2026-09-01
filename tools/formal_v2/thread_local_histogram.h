@@ -120,4 +120,38 @@ private:
     std::vector<uint64_t> buckets_;
 };
 
+class alignas(64) DoubleBufferedHistogram {
+public:
+    DoubleBufferedHistogram() : active_idx_(0) {}
+
+    inline void Record(uint64_t lat_ns) noexcept {
+        uint8_t idx = active_idx_.load(std::memory_order_relaxed);
+        buffers_[idx].Record(lat_ns);
+    }
+
+    // Called by controller thread at epoch boundary:
+    // Prepares the inactive buffer, swaps active buffer index, and returns the frozen buffer index.
+    inline uint8_t SwapAndGetFrozenIndex() noexcept {
+        uint8_t old_idx = active_idx_.load(std::memory_order_relaxed);
+        uint8_t new_idx = old_idx ^ 1;
+        buffers_[new_idx].Reset();
+        active_idx_.store(new_idx, std::memory_order_release);
+        return old_idx;
+    }
+
+    const ThreadLocalHistogram& GetBuffer(uint8_t idx) const noexcept {
+        return buffers_[idx];
+    }
+
+    void ResetAll() {
+        buffers_[0].Reset();
+        buffers_[1].Reset();
+        active_idx_.store(0, std::memory_order_relaxed);
+    }
+
+private:
+    std::atomic<uint8_t> active_idx_{0};
+    ThreadLocalHistogram buffers_[2];
+};
+
 } // namespace study::formal

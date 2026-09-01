@@ -14,7 +14,7 @@ SRCS = formal_driver.cc
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS) formal_config.h json_parser.h manifest_parser.h thread_local_histogram.h formal_event_listener.h worker_state_model.h kv_verifier.h
+$(TARGET): $(SRCS) formal_config.h json_parser.h manifest_parser.h thread_local_histogram.h formal_event_listener.h worker_state_model.h kv_verifier.h rtp_mc_controller.h
 	mkdir -p /home/wam/grad/s14-range-delete-study/bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(ROCKSDB_LIB) $(RPATH) $(LIBS) -o $(TARGET)
 
