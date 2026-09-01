@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 750" width="1100" height="750">
+<style>
+  .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #1e293b; }
+  .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #64748b; }
+  .panel-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #334155; }
+  .axis-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #64748b; }
+  .bar-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; fill: #1e293b; }
+  .legend-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #475569; }
+  .grid { stroke: #e2e8f0; stroke-dasharray: 4,4; }
+</style>
+<rect width="1100" height="750" fill="#f8fafc" rx="8" />
+<text x="50" y="40" class="title">B1: Natural MemTable Flush Boundary Verification</text>
+<text x="50" y="62" class="subtitle">Demonstrating read latency recovery when foreground Put writes cross the 64MB MemTable threshold (256B Value, Native memtable_max_range_deletions=0)</text>
+<rect x="60" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="134" class="panel-title">Scan Unit Cost (μs / valid key)</text>
+<rect x="110" y="180.86956521739128" width="60" height="139.13043478260872" fill="#ef4444" rx="4" />
+<text x="140" y="174.86956521739128" class="bar-label" text-anchor="middle">286.73</text>
+<text x="140" y="340" class="axis-label" text-anchor="middle">0.25x</text>
+<text x="140" y="354" class="axis-label" text-anchor="middle" font-size="9">(16MB)</text>
+<rect x="205" y="191.02617526783774" width="60" height="128.97382473216226" fill="#ef4444" rx="4" />
+<text x="235" y="185.02617526783774" class="bar-label" text-anchor="middle">265.80</text>
+<text x="235" y="340" class="axis-label" text-anchor="middle">0.50x</text>
+<text x="235" y="354" class="axis-label" text-anchor="middle" font-size="9">(32MB)</text>
+<rect x="300" y="201.80905164705763" width="60" height="118.19094835294239" fill="#ef4444" rx="4" />
+<text x="330" y="195.80905164705763" class="bar-label" text-anchor="middle">243.58</text>
+<text x="330" y="340" class="axis-label" text-anchor="middle">0.75x</text>
+<text x="330" y="354" class="axis-label" text-anchor="middle" font-size="9">(48MB)</text>
+<rect x="395" y="265.66557325477237" width="60" height="54.33442674522762" fill="#ef4444" rx="4" />
+<text x="425" y="259.66557325477237" class="bar-label" text-anchor="middle">111.98</text>
+<text x="425" y="340" class="axis-label" text-anchor="middle">1.25x</text>
+<text x="425" y="354" class="axis-label" text-anchor="middle" font-size="9">(80MB)</text>
+<rect x="580" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="134" class="panel-title">Scan P99 vs Put P99 (μs)</text>
+<rect x="625" y="180.86956521739128" width="32" height="139.13043478260872" fill="#f59e0b" rx="3" />
+<rect x="661" y="317" width="32" height="3" fill="#6366f1" rx="3" />
+<text x="641" y="175.86956521739128" class="bar-label" text-anchor="middle" font-size="9">41452</text>
+<text x="677" y="312" class="bar-label" text-anchor="middle" font-size="9">289</text>
+<text x="659" y="340" class="axis-label" text-anchor="middle">0.25x</text>
+<rect x="720" y="181.84145381926132" width="32" height="138.15854618073868" fill="#f59e0b" rx="3" />
+<rect x="756" y="317" width="32" height="3" fill="#6366f1" rx="3" />
+<text x="736" y="176.84145381926132" class="bar-label" text-anchor="middle" font-size="9">41163</text>
+<text x="772" y="312" class="bar-label" text-anchor="middle" font-size="9">259</text>
+<text x="754" y="340" class="axis-label" text-anchor="middle">0.50x</text>
+<rect x="815" y="203.72377126369048" width="32" height="116.27622873630953" fill="#f59e0b" rx="3" />
+<rect x="851" y="317" width="32" height="3" fill="#6366f1" rx="3" />
+<text x="831" y="198.72377126369048" class="bar-label" text-anchor="middle" font-size="9">34643</text>
+<text x="867" y="312" class="bar-label" text-anchor="middle" font-size="9">234</text>
+<text x="849" y="340" class="axis-label" text-anchor="middle">0.75x</text>
+<rect x="910" y="257.19923691864915" width="32" height="62.80076308135088" fill="#f59e0b" rx="3" />
+<rect x="946" y="317" width="32" height="3" fill="#6366f1" rx="3" />
+<text x="926" y="252.19923691864915" class="bar-label" text-anchor="middle" font-size="9">18711</text>
+<text x="962" y="312" class="bar-label" text-anchor="middle" font-size="9">223</text>
+<text x="944" y="340" class="axis-label" text-anchor="middle">1.25x</text>
+<rect x="860" y="125" width="12" height="12" fill="#f59e0b" rx="2" />
+<text x="878" y="135" class="legend-text">Scan P99</text>
+<rect x="940" y="125" width="12" height="12" fill="#6366f1" rx="2" />
+<text x="958" y="135" class="legend-text">Put P99</text>
+<rect x="60" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="434" class="panel-title">Natural Flush Count (kWriteBufferFull)</text>
+<rect x="110" y="616" width="60" height="4" fill="#94a3b8" rx="4" />
+<text x="140" y="610" class="bar-label" text-anchor="middle">0 次</text>
+<text x="140" y="640" class="axis-label" text-anchor="middle">0.25x</text>
+<text x="140" y="654" class="axis-label" text-anchor="middle" font-size="9">(16MB)</text>
+<rect x="205" y="616" width="60" height="4" fill="#94a3b8" rx="4" />
+<text x="235" y="610" class="bar-label" text-anchor="middle">0 次</text>
+<text x="235" y="640" class="axis-label" text-anchor="middle">0.50x</text>
+<text x="235" y="654" class="axis-label" text-anchor="middle" font-size="9">(32MB)</text>
+<rect x="300" y="593.3333333333334" width="60" height="26.666666666666664" fill="#0284c7" rx="4" />
+<text x="330" y="587.3333333333334" class="bar-label" text-anchor="middle">0 次</text>
+<text x="330" y="640" class="axis-label" text-anchor="middle">0.75x</text>
+<text x="330" y="654" class="axis-label" text-anchor="middle" font-size="9">(48MB)</text>
+<rect x="395" y="540.0" width="60" height="80.0" fill="#0284c7" rx="4" />
+<text x="425" y="534.0" class="bar-label" text-anchor="middle">1 次</text>
+<text x="425" y="640" class="axis-label" text-anchor="middle">1.25x</text>
+<text x="425" y="654" class="axis-label" text-anchor="middle" font-size="9">(80MB)</text>
+<rect x="580" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="434" class="panel-title">Total Physical Write Amplification (PWA)</text>
+<rect x="630" y="616" width="60" height="4" fill="#94a3b8" rx="4" />
+<text x="660" y="610" class="bar-label" text-anchor="middle">0.0x</text>
+<text x="660" y="640" class="axis-label" text-anchor="middle">0.25x</text>
+<text x="660" y="654" class="axis-label" text-anchor="middle" font-size="9">(16MB)</text>
+<rect x="725" y="616" width="60" height="4" fill="#94a3b8" rx="4" />
+<text x="755" y="610" class="bar-label" text-anchor="middle">0.0x</text>
+<text x="755" y="640" class="axis-label" text-anchor="middle">0.50x</text>
+<text x="755" y="654" class="axis-label" text-anchor="middle" font-size="9">(32MB)</text>
+<rect x="820" y="576.6395663956639" width="60" height="43.36043360433604" fill="#8b5cf6" rx="4" />
+<text x="850" y="570.6395663956639" class="bar-label" text-anchor="middle">0.2x</text>
+<text x="850" y="640" class="axis-label" text-anchor="middle">0.75x</text>
+<text x="850" y="654" class="axis-label" text-anchor="middle" font-size="9">(48MB)</text>
+<rect x="915" y="496.9230769230769" width="60" height="123.07692307692307" fill="#8b5cf6" rx="4" />
+<text x="945" y="490.9230769230769" class="bar-label" text-anchor="middle">0.5x</text>
+<text x="945" y="640" class="axis-label" text-anchor="middle">1.25x</text>
+<text x="945" y="654" class="axis-label" text-anchor="middle" font-size="9">(80MB)</text>
+</svg>

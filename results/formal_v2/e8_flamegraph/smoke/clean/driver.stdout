@@ -1,0 +1,35 @@
+========================================================
+  Formal V2 - E8 Micro-Benchmark Wait-Point Driver v5
+========================================================
+DB Path:        /home/wam/grad/s14-range-delete-study/run-db/e8_flamegraph/fg_clean_scan_intersect_smoke_1787551137/db
+Trace Dir:      /home/wam/grad/s14-range-delete-study/traces/formal_v2/e8_scan_intersect_clean
+Wait Dir:       /home/wam/grad/s14-range-delete-study/run-db/e8_flamegraph/fg_clean_scan_intersect_smoke_1787551137/wait
+Window Sec:     45s
+Case Name:      clean_scan_intersect
+Threshold:      0
+DisableAutoComp:false
+========================================================
+[DRIVER] Preloading 500000 keys...
+[DRIVER] Preload flushed. Recording LSM state:
+  - Level 0 files: 3
+  - Total SST size: 137012807 bytes
+[DRIVER] Injecting RangeDeletes from Phase B traces...
+[DRIVER] Injected 0 DeleteRanges into active MemTable.
+[DRIVER] Loaded 5000 micro-trace records.
+[DRIVER] Starting 10s warmup...
+[DRIVER] Warmup completed.
+[COORDINATOR] Worker ready. Process PID=2040971, Foreground Worker TID=2041051
+[COORDINATOR] PROFILE_READY.json written. Waiting for PROFILE_START (timeout 120s)...
+[COORDINATOR] PROFILE_START detected! Waking worker thread into 45s window...
+[COORDINATOR] Worker finished 45s loop and entered Wait-Point 2 kernel sleep:
+  - Elapsed Wall: 45.000012 s
+  - Worker CPU:   44.995700 s
+  - Completed Ops:2938078
+  - True IOPS:    65290.604748 ops/sec
+[COORDINATOR] Worker thread joined cleanly.
+[DRIVER] Running Full-DB Key-Value Reconciliation on Coordinator...
+[DRIVER RECONCILIATION] Total Visible Keys: 500000 (Expected: 500000)
+  - DB SHA-256:       7b13ea6f3920955137a0333c9a8bf56600f467e9dc4a7e129aadc9bdf57c0260
+  - Model SHA-256:    7b13ea6f3920955137a0333c9a8bf56600f467e9dc4a7e129aadc9bdf57c0260
+[DRIVER RECONCILIATION] State Reconciliation PASSED (Keys & SHA-256 100% matched).
+[DRIVER SUCCESS] E8 run completed successfully with full state verification.

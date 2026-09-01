@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 750" width="1100" height="750">
+<style>
+  .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #1e293b; }
+  .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #64748b; }
+  .panel-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #334155; }
+  .axis-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #64748b; }
+  .bar-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; fill: #1e293b; }
+  .grid { stroke: #e2e8f0; stroke-dasharray: 4,4; }
+</style>
+<rect width="1100" height="750" fill="#f8fafc" rx="8" />
+<text x="50" y="40" class="title">B2: Dynamic Phase-Switching Static Threshold Mismatch</text>
+<text x="50" y="62" class="subtitle">3 Continuous Phases: Phase A (RangeDel Accumulation) → Phase B (Write Burst) → Phase C (Read Recovery)</text>
+<rect x="60" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="134" class="panel-title">Scan Unit Cost (μs / valid key)</text>
+<rect x="110" y="180.86956521739128" width="60" height="139.13043478260872" fill="#ef4444" rx="4" />
+<text x="140" y="174.86956521739128" class="bar-label" text-anchor="middle">210.68</text>
+<text x="140" y="340" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="205" y="316.45841877834596" width="60" height="3.541581221654046" fill="#10b981" rx="4" />
+<text x="235" y="310.45841877834596" class="bar-label" text-anchor="middle">5.36</text>
+<text x="235" y="340" class="axis-label" text-anchor="middle">T=64</text>
+<rect x="300" y="317.2818353998008" width="60" height="2.7181646001992" fill="#10b981" rx="4" />
+<text x="330" y="311.2818353998008" class="bar-label" text-anchor="middle">4.12</text>
+<text x="330" y="340" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="395" y="308.0096252856565" width="60" height="11.99037471434349" fill="#10b981" rx="4" />
+<text x="425" y="302.0096252856565" class="bar-label" text-anchor="middle">18.16</text>
+<text x="425" y="340" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="580" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="134" class="panel-title">Put P99 Write Tail Latency (μs)</text>
+<rect x="630" y="307.6816735958055" width="60" height="12.318326404194499" fill="#6366f1" rx="4" />
+<text x="660" y="301.6816735958055" class="bar-label" text-anchor="middle">262</text>
+<text x="660" y="340" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="725" y="180.86956521739128" width="60" height="139.13043478260872" fill="#6366f1" rx="4" />
+<text x="755" y="174.86956521739128" class="bar-label" text-anchor="middle">2962</text>
+<text x="755" y="340" class="axis-label" text-anchor="middle">T=64</text>
+<rect x="820" y="278.6194206391617" width="60" height="41.380579360838254" fill="#6366f1" rx="4" />
+<text x="850" y="272.6194206391617" class="bar-label" text-anchor="middle">881</text>
+<text x="850" y="340" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="915" y="306.063489375084" width="60" height="13.936510624916007" fill="#6366f1" rx="4" />
+<text x="945" y="300.063489375084" class="bar-label" text-anchor="middle">296</text>
+<text x="945" y="340" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="60" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="434" class="panel-title">Compaction Physical Dead Keys Dropped</text>
+<rect x="110" y="620.0" width="60" height="0.0" fill="#94a3b8" rx="4" />
+<text x="140" y="614.0" class="bar-label" text-anchor="middle">0</text>
+<text x="140" y="640" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="205" y="480.86956521739125" width="60" height="139.13043478260872" fill="#0284c7" rx="4" />
+<text x="235" y="474.86956521739125" class="bar-label" text-anchor="middle">534,314</text>
+<text x="235" y="640" class="axis-label" text-anchor="middle">T=64</text>
+<rect x="300" y="482.1116291983333" width="60" height="137.8883708016667" fill="#0284c7" rx="4" />
+<text x="330" y="476.1116291983333" class="bar-label" text-anchor="middle">529,544</text>
+<text x="330" y="640" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="395" y="487.01799891536393" width="60" height="132.98200108463607" fill="#0284c7" rx="4" />
+<text x="425" y="481.01799891536393" class="bar-label" text-anchor="middle">510,701</text>
+<text x="425" y="640" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="580" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="434" class="panel-title">Total Physical Write Amplification (PWA)</text>
+<rect x="630" y="616" width="60" height="4" fill="#94a3b8" rx="4" />
+<text x="660" y="610" class="bar-label" text-anchor="middle">0.0x</text>
+<text x="660" y="640" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="725" y="486.66666666666663" width="60" height="133.33333333333334" fill="#8b5cf6" rx="4" />
+<text x="755" y="480.66666666666663" class="bar-label" text-anchor="middle">55.8x</text>
+<text x="755" y="640" class="axis-label" text-anchor="middle">T=64</text>
+<rect x="820" y="577.8088578088579" width="60" height="42.191142191142184" fill="#8b5cf6" rx="4" />
+<text x="850" y="571.8088578088579" class="bar-label" text-anchor="middle">17.7x</text>
+<text x="850" y="640" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="915" y="602.2377622377622" width="60" height="17.762237762237763" fill="#8b5cf6" rx="4" />
+<text x="945" y="596.2377622377622" class="bar-label" text-anchor="middle">7.4x</text>
+<text x="945" y="640" class="axis-label" text-anchor="middle">T=2048</text>
+</svg>

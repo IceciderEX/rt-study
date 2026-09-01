@@ -1,0 +1,57 @@
+Category,Item,Value,Source_or_Validation_Command,Status_or_Note
+Hardware,Node_Name,s14.servers.hustpdsl.cn,uname -n,Verified
+Hardware,CPU_Model,Intel(R) Xeon(R) Gold 5218R CPU @ 2.10GHz,lscpu,Verified
+Hardware,CPU_Sockets_Cores_vCPU,2 Sockets / 40 Cores / 80 vCPUs,lscpu,Verified
+Hardware,NUMA_Nodes,2 (Node0: 0-19 40-59; Node1: 20-39 60-79),lscpu,Verified
+Hardware,L1_Cache,L1d: 1.3MiB / L1i: 1.3MiB (40 instances),lscpu,Verified
+Hardware,L2_Cache,40 MiB (40 instances),lscpu,Verified
+Hardware,L3_Cache,55 MiB (2 instances),lscpu,Verified
+Hardware,Memory_Total_Bytes,83775946752,free -b,Verified (78.0 GiB)
+Hardware,Memory_Available_Bytes,67658678272,free -b,Verified (63.0 GiB)
+Hardware,Swap_Total_Bytes,8589930496,free -b,Verified (8.0 GiB)
+OS,Kernel_Release,6.8.0-136-generic,uname -r,Verified
+OS,OS_Distribution,Ubuntu 22.04.5 LTS,cat /etc/os-release,Verified
+Toolchain,GCC_Version,11.4.0,g++ --version,Verified
+Toolchain,Clang_Version,20.1.8,clang++ --version,Verified
+Toolchain,CMake_Version,3.22.1,cmake --version,Verified
+Storage,Block_Device,nvme0n1 (KIOXIA-EXCERIA PRO SSD 1.8TB),cat /sys/block/nvme0n1/device/model,Verified
+Storage,Rotational,0,cat /sys/block/nvme0n1/queue/rotational,Verified (SSD)
+Storage,Scheduler,[none] mq-deadline,cat /sys/block/nvme0n1/queue/scheduler,Verified
+Storage,Mount_Partition,/dev/nvme0n1p2,findmnt -T /home/wam/grad/s14-range-delete-study,Verified
+Storage,Filesystem_Type,ext4,df -T /home/wam/grad/s14-range-delete-study,Verified
+Storage,Mount_Options,rw,relatime,findmnt,Verified
+Storage,Available_Space_Bytes,627219664896,df -B1,Verified (~585 GiB)
+Storage,Available_Inodes,116681759,df -i,Verified (95% Free)
+Storage,Single_Run_Budget_Bytes,5368709120,Estimation,Max 5 GiB
+Storage,Full_Pre_Experiment_Budget_Bytes,32212254720,Estimation,Max 30 GiB peak
+Workload,Background_IO_Util_Percent,0.00,iostat -xz 1 2,Verified (No active contention)
+RocksDB_Source,Path,/home/wam/grad/rocksdb-v11.8.0,Directory,Verified
+RocksDB_Source,Git_Tag,v11.8.0,git describe --tags,Verified
+RocksDB_Source,Git_Commit,abeebd9630f11bd08c28b7bd43c7bdfc62050654,git rev-parse HEAD,Verified
+RocksDB_Source,Git_Status,clean (pure official upstream),git status,Verified
+RocksDB_Source,Build_Type,Release (-O2),cmake / make -j32 rocksdb,Verified (librocksdb.a 39MB)
+RocksDB_Metric,Compaction_Read_Bytes,Tickers::COMPACT_READ_BYTES,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Compaction_Write_Bytes,Tickers::COMPACT_WRITE_BYTES,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Flush_Write_Bytes,Tickers::FLUSH_WRITE_BYTES,include/rocksdb/statistics.h,Available
+RocksDB_Metric,WriteStall_Micros,Tickers::STALL_MICROS,include/rocksdb/statistics.h,Available
+RocksDB_Metric,WriteStall_L0_Slowdown_Count,Tickers::STALL_L0_SLOWDOWN_COUNT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,WriteStall_Memtable_Count,Tickers::STALL_MEMTABLE_COMPACTION_COUNT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,WriteStall_L0_Num_Files_Count,Tickers::STALL_L0_NUM_FILES_COUNT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Delayed_Write_Rate,DB::Properties::kActualDelayedWriteRate,include/rocksdb/db.h,Available
+RocksDB_Metric,L0_File_Count,DB::Properties::kNumFilesAtLevelPrefix+"0",include/rocksdb/db.h,Available
+RocksDB_Metric,Pending_Compaction_Bytes,DB::Properties::kEstimatePendingCompactionBytes,include/rocksdb/db.h,Available
+RocksDB_Metric,Running_Flushes_Count,DB::Properties::kNumRunningFlushes,include/rocksdb/db.h,Available
+RocksDB_Metric,Running_Compactions_Count,DB::Properties::kNumRunningCompactions,include/rocksdb/db.h,Available
+RocksDB_Metric,Block_Cache_Data_Hit,Tickers::BLOCK_CACHE_DATA_HIT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Block_Cache_Data_Miss,Tickers::BLOCK_CACHE_DATA_MISS,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Block_Cache_Index_Hit,Tickers::BLOCK_CACHE_INDEX_HIT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Block_Cache_Index_Miss,Tickers::BLOCK_CACHE_INDEX_MISS,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Block_Cache_Filter_Hit,Tickers::BLOCK_CACHE_FILTER_HIT,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Block_Cache_Filter_Miss,Tickers::BLOCK_CACHE_FILTER_MISS,include/rocksdb/statistics.h,Available
+RocksDB_Metric,Compaction_Key_Drop_Range_Del,Tickers::COMPACTION_KEY_DROP_RANGE_DEL,include/rocksdb/statistics.h,Available (Count of keys dropped by tombstones)
+RocksDB_Metric,Tombstone_Self_Drop_Count,None,include/rocksdb/statistics.h,Unavailable (Native lacks standalone self-tombstone drop ticker)
+RocksDB_Metric,Range_Tombstone_Count_SST,TableProperties::num_range_deletions,include/rocksdb/table_properties.h,Available (via kAggregatedTableProperties)
+RocksDB_Metric,Active_Memtable_Deletes,DB::Properties::kNumDeletesActiveMemTable,include/rocksdb/db.h,Partially Available (Point deletes only)
+RocksDB_Metric,Total_SST_Files_Size,DB::Properties::kTotalSstFilesSize,include/rocksdb/db.h,Available
+RocksDB_Metric,Live_SST_Files_Size,DB::Properties::kLiveSstFilesSize,include/rocksdb/db.h,Available
+RocksDB_Metric,Estimate_Live_Data_Size,DB::Properties::kEstimateLiveDataSize,include/rocksdb/db.h,Available

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="100%" height="400" style="background:#0f172a; font-family:sans-serif;">
+      <text x="480" y="30" fill="#f8fafc" font-size="18" font-weight="bold" text-anchor="middle">E2: Value Size - MemTable Pressure Mismatch Validation</text>
+      
+      <!-- Panel 1: Scan Cost (μs/key) Comparison -->
+      <g transform="translate(50, 60)">
+        <rect width="410" height="300" rx="8" fill="#1e293b" stroke="#334155"/>
+        <text x="205" y="25" fill="#38bdf8" font-size="14" font-weight="bold" text-anchor="middle">Scan Cost (μs/key): Default vs T=256</text>
+        <line x1="30" y1="250" x2="380" y2="250" stroke="#64748b"/>
+        
+        <!-- Legend -->
+        <rect x="110" y="45" width="15" height="10" fill="#ef4444" rx="2"/>
+        <text x="130" y="54" fill="#e2e8f0" font-size="10">Default (T=0)</text>
+        <rect x="240" y="45" width="15" height="10" fill="#10b981" rx="2"/>
+        <text x="260" y="54" fill="#e2e8f0" font-size="10">Fixed (T=256)</text>
+
+        <!-- Pair 64 B -->
+        <rect x="50" y="101.3" width="30" height="148.7" fill="#ef4444" rx="3"/>
+        <text x="65" y="93.3" fill="#f8fafc" font-size="8" text-anchor="middle">227.5</text>
+
+        <rect x="85" y="247.3" width="30" height="2.7" fill="#10b981" rx="3"/>
+        <text x="100" y="239.3" fill="#f8fafc" font-size="8" text-anchor="middle">4.1</text>
+
+        <text x="82" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">64 B</text>
+        
+        <!-- Pair 256 B -->
+        <rect x="135" y="103.9" width="30" height="146.1" fill="#ef4444" rx="3"/>
+        <text x="150" y="95.9" fill="#f8fafc" font-size="8" text-anchor="middle">223.5</text>
+
+        <rect x="170" y="246.6" width="30" height="3.4" fill="#10b981" rx="3"/>
+        <text x="185" y="238.6" fill="#f8fafc" font-size="8" text-anchor="middle">5.2</text>
+
+        <text x="167" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">256 B</text>
+        
+        <!-- Pair 1 KiB -->
+        <rect x="220" y="98.8" width="30" height="151.2" fill="#ef4444" rx="3"/>
+        <text x="235" y="90.8" fill="#f8fafc" font-size="8" text-anchor="middle">231.3</text>
+
+        <rect x="255" y="245.3" width="30" height="4.7" fill="#10b981" rx="3"/>
+        <text x="270" y="237.3" fill="#f8fafc" font-size="8" text-anchor="middle">7.2</text>
+
+        <text x="252" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">1 KiB</text>
+        
+        <!-- Pair 4 KiB -->
+        <rect x="305" y="88.9" width="30" height="161.1" fill="#ef4444" rx="3"/>
+        <text x="320" y="80.9" fill="#f8fafc" font-size="8" text-anchor="middle">246.4</text>
+
+        <rect x="340" y="242.3" width="30" height="7.7" fill="#10b981" rx="3"/>
+        <text x="355" y="234.3" fill="#f8fafc" font-size="8" text-anchor="middle">11.8</text>
+
+        <text x="337" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">4 KiB</text>
+        
+      </g>
+
+      <!-- Panel 2: Write Amplification vs Put P99 Tradeoff -->
+      <g transform="translate(500, 60)">
+        <rect width="410" height="300" rx="8" fill="#1e293b" stroke="#334155"/>
+        <text x="205" y="25" fill="#38bdf8" font-size="14" font-weight="bold" text-anchor="middle">Write Amplification (WA) for T=256</text>
+        <line x1="30" y1="250" x2="380" y2="250" stroke="#64748b"/>
+
+        <!-- WA Bar 64 B -->
+        <rect x="65" y="80.0" width="40" height="170.0" fill="#f59e0b" rx="3"/>
+        <text x="85" y="72.0" fill="#f8fafc" font-size="9" text-anchor="middle">122.5x</text>
+        <text x="85" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">64 B</text>
+        
+        <!-- WA Bar 256 B -->
+        <rect x="150" y="102.4" width="40" height="147.6" fill="#f59e0b" rx="3"/>
+        <text x="170" y="94.4" fill="#f8fafc" font-size="9" text-anchor="middle">104.2x</text>
+        <text x="170" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">256 B</text>
+        
+        <!-- WA Bar 1 KiB -->
+        <rect x="235" y="188.4" width="40" height="61.6" fill="#f59e0b" rx="3"/>
+        <text x="255" y="180.4" fill="#f8fafc" font-size="9" text-anchor="middle">43.5x</text>
+        <text x="255" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">1 KiB</text>
+        
+        <!-- WA Bar 4 KiB -->
+        <rect x="320" y="225.3" width="40" height="24.7" fill="#f59e0b" rx="3"/>
+        <text x="340" y="217.3" fill="#f8fafc" font-size="9" text-anchor="middle">17.5x</text>
+        <text x="340" y="270" fill="#94a3b8" font-size="10" font-weight="bold" text-anchor="middle">4 KiB</text>
+        
+      </g>
+    </svg>

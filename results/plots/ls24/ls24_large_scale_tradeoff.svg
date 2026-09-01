@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 750" width="1100" height="750">
+<style>
+  .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 20px; font-weight: 700; fill: #1e293b; }
+  .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #64748b; }
+  .panel-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; fill: #334155; }
+  .axis-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; fill: #64748b; }
+  .bar-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; fill: #1e293b; }
+</style>
+<rect width="1100" height="750" fill="#f8fafc" rx="8" />
+<text x="50" y="40" class="title">LS24: 24GiB (100M Keys) Large-Scale RangeDelete Tradeoff</text>
+<text x="50" y="62" class="subtitle">Validation under 24GiB Payload on NVMe: T=0 vs T=256 vs T=2048</text>
+<rect x="60" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="134" class="panel-title">Scan Unit Cost (μs / valid key)</text>
+<rect x="130" y="180.86956521739128" width="70" height="139.13043478260872" fill="#ef4444" rx="4" />
+<text x="165" y="174.86956521739128" class="bar-label" text-anchor="middle">25.98</text>
+<text x="165" y="340" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="250" y="297.05427923514816" width="70" height="22.945720764851853" fill="#10b981" rx="4" />
+<text x="285" y="291.05427923514816" class="bar-label" text-anchor="middle">4.29</text>
+<text x="285" y="340" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="370" y="294.8794486710816" width="70" height="25.120551328918417" fill="#10b981" rx="4" />
+<text x="405" y="288.8794486710816" class="bar-label" text-anchor="middle">4.69</text>
+<text x="405" y="340" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="580" y="110" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="134" class="panel-title">Put P99 Write Tail Latency (μs)</text>
+<rect x="650" y="298.45126660275724" width="70" height="21.548733397242735" fill="#6366f1" rx="4" />
+<text x="685" y="292.45126660275724" class="bar-label" text-anchor="middle">253</text>
+<text x="685" y="340" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="770" y="180.8695652173913" width="70" height="139.1304347826087" fill="#6366f1" rx="4" />
+<text x="805" y="174.8695652173913" class="bar-label" text-anchor="middle">1638</text>
+<text x="805" y="340" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="890" y="307.16034716278733" width="70" height="12.839652837212691" fill="#6366f1" rx="4" />
+<text x="925" y="301.16034716278733" class="bar-label" text-anchor="middle">151</text>
+<text x="925" y="340" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="60" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="76" y="434" class="panel-title">Overall IOPS (kOps/s)</text>
+<rect x="130" y="605.9227340190481" width="70" height="14.077265980951914" fill="#94a3b8" rx="4" />
+<text x="165" y="599.9227340190481" class="bar-label" text-anchor="middle">4.7k</text>
+<text x="165" y="640" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="250" y="480.86956521739125" width="70" height="139.13043478260872" fill="#0284c7" rx="4" />
+<text x="285" y="474.86956521739125" class="bar-label" text-anchor="middle">46.4k</text>
+<text x="285" y="640" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="370" y="504.445740783121" width="70" height="115.55425921687905" fill="#0284c7" rx="4" />
+<text x="405" y="498.445740783121" class="bar-label" text-anchor="middle">38.6k</text>
+<text x="405" y="640" class="axis-label" text-anchor="middle">T=2048</text>
+<rect x="580" y="410" width="460" height="260" fill="#ffffff" stroke="#cbd5e1" rx="6" />
+<text x="596" y="434" class="panel-title">Total Physical Write Amplification (PWA)</text>
+<rect x="650" y="616" width="70" height="4" fill="#94a3b8" rx="4" />
+<text x="685" y="610" class="bar-label" text-anchor="middle">0.0x</text>
+<text x="685" y="640" class="axis-label" text-anchor="middle">T=0 (Disabled)</text>
+<rect x="770" y="486.66666666666663" width="70" height="133.33333333333334" fill="#8b5cf6" rx="4" />
+<text x="805" y="480.66666666666663" class="bar-label" text-anchor="middle">135.5x</text>
+<text x="805" y="640" class="axis-label" text-anchor="middle">T=256</text>
+<rect x="890" y="500.96128939415746" width="70" height="119.03871060584254" fill="#8b5cf6" rx="4" />
+<text x="925" y="494.96128939415746" class="bar-label" text-anchor="middle">121.0x</text>
+<text x="925" y="640" class="axis-label" text-anchor="middle">T=2048</text>
+</svg>

@@ -1,0 +1,129 @@
+{
+  "metadata": {
+    "generator": "plot_opening_figures.py",
+    "generator_sha256": "f9f18d5ed9344dc5a3dcacfcf5d05e7cdbeab1f3c77c11c48c3450949b5eda63",
+    "generated_at": "2026-08-24T14:00:00+08:00",
+    "dpi": 600,
+    "color_system": "Okabe-Ito (colorblind safe)",
+    "font_config": {
+      "chinese": "SimSun (宋体)",
+      "english": "Times New Roman"
+    }
+  },
+  "figures": [
+    {
+      "figure_id": "fig4-1",
+      "title": "高密度RangeDelete下范围墓碑压力形成及其读写维护权衡",
+      "type": "qualitative_mechanism_flowchart",
+      "inputs": [],
+      "outputs": [
+        "results/plots/opening/fig4-1-range-tombstone-mechanism.svg",
+        "results/plots/opening/fig4-1-range-tombstone-mechanism.pdf",
+        "results/plots/opening/fig4-1-range-tombstone-mechanism.png"
+      ],
+      "sample_size_N": "N/A (定性图)",
+      "error_bar_metric": "N/A",
+      "log_scale": false
+    },
+    {
+      "figure_id": "fig4-2",
+      "title": "不同DeleteRange比例下的前台吞吐与读取开销",
+      "type": "3_subplot_bar_chart",
+      "inputs": [
+        {
+          "path": "results/plots/opening/source-data/fig4-2-delete-ratio.csv",
+          "sha256": "29c8c693ff6399597bd61509ca5a1a6ed04c3e63b388148338fabb44afd53034"
+        }
+      ],
+      "outputs": [
+        "results/plots/opening/fig4-2-delete-ratio.svg",
+        "results/plots/opening/fig4-2-delete-ratio.pdf",
+        "results/plots/opening/fig4-2-delete-ratio.png"
+      ],
+      "sample_size_N": 3,
+      "error_bar_metric": "样本标准差 (Sample Standard Deviation, ddof=1)",
+      "log_scale": true,
+      "log_scale_axes": [
+        "(a) 总体吞吐",
+        "(b) Scan单位有效键开销",
+        "(c) Get(Control)P99延迟"
+      ]
+    },
+    {
+      "figure_id": "fig4-3",
+      "title": "不同固定RangeDelete数量阈值下的读取尾延迟、写入尾延迟与前台阶段引擎输出写放大",
+      "type": "3_subplot_bar_chart",
+      "inputs": [
+        {
+          "path": "results/plots/opening/source-data/fig4-3-threshold-tradeoff.csv",
+          "sha256": "44babbb328cd5e67446e8885405d1e199b4b63c3801bdff4041370e0bc49e01b"
+        }
+      ],
+      "outputs": [
+        "results/plots/opening/fig4-3-threshold-tradeoff.svg",
+        "results/plots/opening/fig4-3-threshold-tradeoff.pdf",
+        "results/plots/opening/fig4-3-threshold-tradeoff.png"
+      ],
+      "sample_size_N": 5,
+      "error_bar_metric": "样本标准差 (Sample Standard Deviation, ddof=1)",
+      "log_scale": true,
+      "log_scale_axes": [
+        "(a) Scan P99延迟",
+        "(b) Put P99延迟"
+      ],
+      "linear_scale_axes": [
+        "(c) 前台阶段引擎输出写放大"
+      ]
+    },
+    {
+      "figure_id": "fig4-4",
+      "title": "不同数据规模下T0与T512的前台性能对比",
+      "type": "3_subplot_grouped_bar_chart",
+      "inputs": [
+        {
+          "path": "results/plots/opening/source-data/fig4-4-scale-validation.csv",
+          "sha256": "24c4d0d70dd45a127ad0e137e055aa99d69465ba2eac320443ed03bd35619892"
+        }
+      ],
+      "outputs": [
+        "results/plots/opening/fig4-4-scale-validation.svg",
+        "results/plots/opening/fig4-4-scale-validation.pdf",
+        "results/plots/opening/fig4-4-scale-validation.png"
+      ],
+      "sample_size_N": 5,
+      "error_bar_metric": "样本标准差 (Sample Standard Deviation, ddof=1)",
+      "log_scale": true,
+      "log_scale_axes": [
+        "(a) Trace IOPS",
+        "(b) Scan P99延迟",
+        "(c) Get(Deleted) P99延迟"
+      ]
+    },
+    {
+      "figure_id": "fig4-5",
+      "title": "20GiB动态混合负载下一次探索性全生命周期运行中范围墓碑、L0文件及Put P99延迟的演化",
+      "type": "3_subplot_shared_x_timeline",
+      "inputs": [
+        {
+          "path": "results/plots/opening/source-data/fig4-5-longcycle-lifecycle.csv",
+          "sha256": "9b9f95f691c300f0d9dab06d0981b1cee348f2e1e6bdacdd7fb0e308db3038b8"
+        }
+      ],
+      "outputs": [
+        "results/plots/opening/fig4-5-longcycle-lifecycle.svg",
+        "results/plots/opening/fig4-5-longcycle-lifecycle.pdf",
+        "results/plots/opening/fig4-5-longcycle-lifecycle.png"
+      ],
+      "sample_size_N": 1,
+      "error_bar_metric": "N/A (单次全生命周期连续采样)",
+      "log_scale": true,
+      "log_scale_axes": [
+        "(a) 活跃MemTable范围墓碑数",
+        "(c) Put P99延迟"
+      ],
+      "linear_scale_axes": [
+        "(b) L0文件数"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+exp_id,group_name,threshold,phase,elapsed_sec,completed_ops,true_phase_iops,scan_us_per_key,scan_p99_us,scan_intersect_p99_us,scan_non_intersect_p99_us,get_live_p99_us,get_del_p99_us,put_p99_us,scan_limit_truncated_count
+smoke_e5_hot_t512,E5-Hot-T512,512,"Phase A (Read Sensitive)",0.1805,100000,553903.7622,0.4443,86.1516,0.0000,86.1516,13.2386,0.0000,22.7979,0
+smoke_e5_hot_t512,E5-Hot-T512,512,"Phase B (Write Burst)",0.1943,100000,514787.3251,0.6846,106.1181,103.1386,118.9943,71.8752,70.8804,37.8580,0
+smoke_e5_hot_t512,E5-Hot-T512,512,"Phase B-Inject (20% Window)",0.0389,20000,514787.3251,0.7556,133.5948,128.6689,143.7579,91.1458,89.0171,52.7997,0
+smoke_e5_hot_t512,E5-Hot-T512,512,"Phase B-PostBurst (80% Window)",0.1554,80000,514787.3251,0.6550,61.8466,54.3909,68.6403,10.9382,2.9620,27.7601,0
+smoke_e5_hot_t512,E5-Hot-T512,512,"Phase C (Read Recovery)",0.1731,100000,577675.3346,0.7538,101.4649,76.1802,110.3811,11.8491,3.8999,29.7095,0
+smoke_e5_cold_t512,E5-Cold-T512,512,"Phase A (Read Sensitive)",0.2391,100000,418294.5978,0.5027,104.8398,0.0000,104.8398,15.3853,0.0000,39.9315,0
+smoke_e5_cold_t512,E5-Cold-T512,512,"Phase B (Write Burst)",0.2662,100000,375680.9236,0.5158,146.0406,142.1984,146.2177,93.8926,91.3670,45.8753,0
+smoke_e5_cold_t512,E5-Cold-T512,512,"Phase B-Inject (20% Window)",0.0532,20000,375680.9236,0.7355,171.2711,173.3594,171.2711,117.4186,111.7947,66.2698,0
+smoke_e5_cold_t512,E5-Cold-T512,512,"Phase B-PostBurst (80% Window)",0.2129,80000,375680.9236,0.4654,63.0575,56.7820,63.1722,10.1650,3.1776,25.0125,0
+smoke_e5_cold_t512,E5-Cold-T512,512,"Phase C (Read Recovery)",0.1804,100000,554446.3886,0.4658,64.3311,50.3928,64.5654,8.1234,3.3335,22.1175,0
