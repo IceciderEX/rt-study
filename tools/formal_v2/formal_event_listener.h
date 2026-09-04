@@ -95,9 +95,42 @@ public:
         verification_start_time_ = std::chrono::steady_clock::now();
     }
 
-    void SetFlushCompletedCallback(std::function<void(uint64_t)> cb) {
+    void SetFlushBeginCallback(std::function<void(rocksdb::FlushReason, int)> cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_flush_begin_cb_ = cb;
+    }
+
+    void SetFlushCompletedCallback(std::function<void(rocksdb::FlushReason, int, uint64_t)> cb) {
         std::lock_guard<std::mutex> lock(mutex_);
         on_flush_completed_cb_ = cb;
+    }
+
+    void SetMemTableSealedCallback(std::function<void(const rocksdb::MemTableInfo&)> cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_memtable_sealed_cb_ = cb;
+    }
+
+    void OnFlushBegin(rocksdb::DB* /*db*/, const rocksdb::FlushJobInfo& info) override {
+        std::function<void(rocksdb::FlushReason, int)> cb_copy;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cb_copy = on_flush_begin_cb_;
+        }
+        if (cb_copy) {
+            cb_copy(info.flush_reason, info.job_id);
+        }
+    }
+
+    void OnMemTableSealed(const rocksdb::MemTableInfo& info) override {
+        std::function<void(const rocksdb::MemTableInfo&)> cb_copy;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sealed_memtable_count_++;
+            cb_copy = on_memtable_sealed_cb_;
+        }
+        if (cb_copy) {
+            cb_copy(info);
+        }
     }
 
     // Ultra-lightweight callback: zero filesystem I/O, zero string conversions
@@ -108,7 +141,7 @@ public:
             info.table_properties.data_size : 
             (info.table_properties.raw_key_size + info.table_properties.raw_value_size);
 
-        std::function<void(uint64_t)> cb_copy;
+        std::function<void(rocksdb::FlushReason, int, uint64_t)> cb_copy;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             
@@ -141,7 +174,7 @@ public:
         }
 
         if (cb_copy) {
-            cb_copy(out_bytes);
+            cb_copy(info.flush_reason, info.job_id, out_bytes);
         }
     }
 
@@ -297,6 +330,11 @@ public:
         }
     }
 
+    uint64_t GetSealedMemTableCount() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return sealed_memtable_count_;
+    }
+
 private:
     static std::string CompactionReasonToString(rocksdb::CompactionReason reason) {
         switch (reason) {
@@ -330,7 +368,11 @@ private:
     uint64_t ver_compaction_read_bytes_;
     uint64_t ver_compaction_write_bytes_;
 
-    std::function<void(uint64_t)> on_flush_completed_cb_;
+    uint64_t sealed_memtable_count_ = 0;
+
+    std::function<void(rocksdb::FlushReason, int)> on_flush_begin_cb_;
+    std::function<void(rocksdb::FlushReason, int, uint64_t)> on_flush_completed_cb_;
+    std::function<void(const rocksdb::MemTableInfo&)> on_memtable_sealed_cb_;
 };
 
 } // namespace study::formal

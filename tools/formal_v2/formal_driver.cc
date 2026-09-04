@@ -327,8 +327,14 @@ public:
 
         auto rtp_controller = std::make_unique<RtpMcController>(
             db_.get(), config_, config_.exp_id, worker_rtp_bundles, event_listener_);
-        event_listener_->SetFlushCompletedCallback([&](uint64_t out_bytes) {
-            rtp_controller->NotifyFlushCompleted(out_bytes);
+        event_listener_->SetFlushBeginCallback([&](rocksdb::FlushReason reason, int job_id) {
+            rtp_controller->NotifyFlushBegin(reason, job_id);
+        });
+        event_listener_->SetFlushCompletedCallback([&](rocksdb::FlushReason reason, int job_id, uint64_t out_bytes) {
+            rtp_controller->NotifyFlushCompleted(reason, job_id, out_bytes);
+        });
+        event_listener_->SetMemTableSealedCallback([&](const rocksdb::MemTableInfo& info) {
+            rtp_controller->NotifyMemTableSealed(info);
         });
         rtp_controller->Start();
 

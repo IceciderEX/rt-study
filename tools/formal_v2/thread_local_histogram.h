@@ -5,6 +5,8 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <atomic>
+#include <thread>
 
 namespace study::formal {
 
@@ -122,35 +124,73 @@ private:
 
 class alignas(64) DoubleBufferedHistogram {
 public:
-    DoubleBufferedHistogram() : active_idx_(0) {}
+    DoubleBufferedHistogram() {
+        epoch_.store(0, std::memory_order_relaxed);
+        writers_[0].store(0, std::memory_order_relaxed);
+        writers_[1].store(0, std::memory_order_relaxed);
+    }
+
+    DoubleBufferedHistogram(const DoubleBufferedHistogram&) = delete;
+    DoubleBufferedHistogram& operator=(const DoubleBufferedHistogram&) = delete;
 
     inline void Record(uint64_t lat_ns) noexcept {
-        uint8_t idx = active_idx_.load(std::memory_order_relaxed);
-        buffers_[idx].Record(lat_ns);
+        while (true) {
+            uint64_t epoch = epoch_.load(std::memory_order_acquire);
+            uint32_t slot = static_cast<uint32_t>(epoch & 1);
+
+            writers_[slot].fetch_add(1, std::memory_order_acquire);
+
+            if (epoch_.load(std::memory_order_acquire) == epoch) {
+                buffers_[slot].Record(lat_ns);
+                writers_[slot].fetch_sub(1, std::memory_order_release);
+                break;
+            }
+
+            writers_[slot].fetch_sub(1, std::memory_order_release);
+        }
     }
 
-    // Called by controller thread at epoch boundary:
-    // Prepares the inactive buffer, swaps active buffer index, and returns the frozen buffer index.
-    inline uint8_t SwapAndGetFrozenIndex() noexcept {
-        uint8_t old_idx = active_idx_.load(std::memory_order_relaxed);
-        uint8_t new_idx = old_idx ^ 1;
-        buffers_[new_idx].Reset();
-        active_idx_.store(new_idx, std::memory_order_release);
-        return old_idx;
+    // Called by Controller thread at epoch boundary.
+    // Advances epoch to freeze current active slot, waits for all in-flight writers on the frozen slot
+    // to finish, merges the frozen buffer into target, and resets the frozen buffer.
+    inline void FreezeAndMergeInto(ThreadLocalHistogram& target) {
+        uint64_t old_epoch = epoch_.fetch_add(1, std::memory_order_acq_rel);
+        uint32_t frozen_slot = static_cast<uint32_t>(old_epoch & 1);
+
+        while (writers_[frozen_slot].load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+
+        target.MergeFrom(buffers_[frozen_slot]);
+        buffers_[frozen_slot].Reset();
     }
 
-    const ThreadLocalHistogram& GetBuffer(uint8_t idx) const noexcept {
-        return buffers_[idx];
+    template <typename Func>
+    inline void FreezeExtractAndReset(Func&& fn) {
+        uint64_t old_epoch = epoch_.fetch_add(1, std::memory_order_acq_rel);
+        uint32_t frozen_slot = static_cast<uint32_t>(old_epoch & 1);
+
+        while (writers_[frozen_slot].load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+
+        fn(buffers_[frozen_slot]);
+        buffers_[frozen_slot].Reset();
     }
 
     void ResetAll() {
+        while (writers_[0].load(std::memory_order_acquire) != 0 || 
+               writers_[1].load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
         buffers_[0].Reset();
         buffers_[1].Reset();
-        active_idx_.store(0, std::memory_order_relaxed);
+        epoch_.store(0, std::memory_order_relaxed);
     }
 
 private:
-    std::atomic<uint8_t> active_idx_{0};
+    alignas(64) std::atomic<uint64_t> epoch_{0};
+    alignas(64) std::atomic<uint32_t> writers_[2]{{0}, {0}};
     ThreadLocalHistogram buffers_[2];
 };
 

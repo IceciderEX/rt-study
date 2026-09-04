@@ -73,8 +73,10 @@ def run_test():
     # 3. Verify Phase CSV and Barrier Synchronization
     assert os.path.exists(phases_csv), "Missing phases CSV"
     df_phases = pd.read_csv(phases_csv)
-    assert len(df_phases) == 9, f"Expected 9 phase rows (3 runs x 3 phases), got {len(df_phases)}"
-    for idx, row in df_phases.iterrows():
+    assert len(df_phases) == 15, f"Expected 15 phase rows (3 runs x 5 phase/subphase records), got {len(df_phases)}"
+    main_phases = df_phases[~df_phases["phase"].str.contains("Window")]
+    assert len(main_phases) == 9, f"Expected 9 main phase rows (3 runs x 3 main phases), got {len(main_phases)}"
+    for idx, row in main_phases.iterrows():
         assert row["elapsed_sec"] > 0.0, "Elapsed sec must be positive"
         assert row["true_phase_iops"] > 0.0, "True Phase IOPS must be positive"
         expected_iops = row["completed_ops"] / row["elapsed_sec"]

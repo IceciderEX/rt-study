@@ -1,0 +1,11 @@
+condition,workload,sub_state,rep,ops,total_time_ms,latency_us_per_op,visible_keys,memtable_fragment_build_count,memtable_fragment_build_ms,active_mem_tombstone_query_count,active_mem_tombstone_query_ms,imm_mem_tombstone_query_count,imm_mem_tombstone_query_ms,active_mem_iter_construct_count,active_mem_iter_construct_ms,imm_mem_iter_construct_count,imm_mem_iter_construct_ms,sst_iter_construct_count,sst_iter_construct_ms,scan_range_del_reseek_count,scan_boundary_advance_count,scan_child_next_count,scan_covered_skip_count
+CLEAN,get_live,Warm-steady,1,1000,2.382,2.382,1000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0,0,0
+T0-MEM,get_live,Cold-build,1,1,2.670,2670.405,1,1,2.6385,1,2.6397,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0,0,0
+T0-MEM,get_live,Warm-steady,1,1000,2.662,2.662,1000,0,0.0000,1000,0.2193,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0,0,0
+T0-MEM,get_live,Re-invalidated,1,1,2.770,2769.840,1,1,2.7599,1,2.7607,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0,0,0
+T0-MEM,scan_intersect,Cold-build,1,1,3.031,3031.285,40,1,2.9235,0,0.0000,0,0.0000,1,2.9259,1,0.0002,1,0.0079,3,4,0,0
+T0-MEM,scan_intersect,Warm-steady,1,1000,23.418,23.418,40000,0,0.0000,0,0.0000,0,0.0000,1000,0.2450,1000,0.0326,1000,0.7057,3000,4000,0,0
+T0-MEM,scan_intersect,Re-invalidated,1,1,3.790,3789.585,40,1,3.7504,0,0.0000,0,0.0000,1,3.7519,1,0.0002,1,0.0045,3,4,0,0
+POSTFLUSH-SST,scan_intersect,Warm-steady,1,1000,25.012,25.012,40000,0,0.0000,0,0.0000,0,0.0000,1000,0.0869,1000,0.0353,1000,1.4750,4000,4000,0,0
+POSTFLUSH-SST,get_live,Warm-steady,1,1000,2.214,2.214,1000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0.0000,0,0,0,0
+CLEAN,scan_intersect,Warm-steady,1,1000,23.460,23.460,50000,0,0.0000,0,0.0000,0,0.0000,1000,0.0831,1000,0.0243,1000,0.9253,0,0,0,0

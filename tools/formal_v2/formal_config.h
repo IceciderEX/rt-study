@@ -44,8 +44,11 @@ struct FormalConfig {
     std::string rtp_mc_mode = "disabled"; // "disabled", "observe", "shadow", "active_v2a", "active_v2b"
     uint64_t control_epoch_ms = 50;
     uint64_t range_del_checkpoint = 128;
-    uint64_t min_scan_samples = 20;
-    uint64_t min_get_samples = 50;
+    uint64_t min_scan_samples = 50;
+    uint64_t min_get_samples = 100;
+    uint64_t min_put_samples = 50;
+    double ref_read_rate = 10000.0;
+    uint64_t rolling_window_ms = 500;
     double scan_slo_us = 500.0;
     double getlive_slo_us = 200.0;
     double put_slo_us = 150.0;
@@ -124,6 +127,9 @@ struct FormalConfig {
             else if (key == "range_del_checkpoint") range_del_checkpoint = std::stoull(val);
             else if (key == "min_scan_samples") min_scan_samples = std::stoull(val);
             else if (key == "min_get_samples") min_get_samples = std::stoull(val);
+            else if (key == "min_put_samples") min_put_samples = std::stoull(val);
+            else if (key == "ref_read_rate") ref_read_rate = std::stod(val);
+            else if (key == "rolling_window_ms") rolling_window_ms = std::stoull(val);
             else if (key == "scan_slo_us") scan_slo_us = std::stod(val);
             else if (key == "getlive_slo_us") getlive_slo_us = std::stod(val);
             else if (key == "put_slo_us") put_slo_us = std::stod(val);
