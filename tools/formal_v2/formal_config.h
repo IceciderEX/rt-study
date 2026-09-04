@@ -76,6 +76,10 @@ struct FormalConfig {
     // Oracle Flush Control
     bool oracle_flush_after_phase_b = false;
 
+    // Dynamic Audit Options
+    std::string audit_output_dir = "";
+    int rep = 1;
+
     bool ParseIni(const std::string& filepath) {
         std::ifstream file(filepath);
         if (!file.is_open()) {
@@ -149,6 +153,8 @@ struct FormalConfig {
             else if (key == "level0_file_num_compaction_trigger") level0_file_num_compaction_trigger = std::stoi(val);
             else if (key == "max_background_jobs") max_background_jobs = std::stoi(val);
             else if (key == "oracle_flush_after_phase_b") oracle_flush_after_phase_b = ParseBool(val);
+            else if (key == "audit_output_dir") audit_output_dir = val;
+            else if (key == "rep") rep = std::stoi(val);
         }
         return true;
     }

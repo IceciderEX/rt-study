@@ -1,7 +1,11 @@
 CXX = g++
-CXXFLAGS = -O2 -g -std=c++20 -fno-rtti -DNDEBUG -Wall -Wextra -pthread
 ROCKSDB_ROOT = /home/wam/grad/rocksdb-v11.8.0
-INCLUDES = -I$(ROCKSDB_ROOT)/include -I.
+ROCKSDB_COMMIT ?= $(shell git -C $(ROCKSDB_ROOT) rev-parse HEAD 2>/dev/null || echo "unknown")
+STUDY_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+CXXFLAGS = -O2 -g -std=c++20 -fno-rtti -DNDEBUG -Wall -Wextra -pthread -DROCKSDB_READ_PATH_AUDIT \
+           -DROCKSDB_GIT_COMMIT=\"$(ROCKSDB_COMMIT)\" -DSTUDY_GIT_COMMIT=\"$(STUDY_COMMIT)\"
+INCLUDES = -I$(ROCKSDB_ROOT)/include -I$(ROCKSDB_ROOT) -I.
 ROCKSDB_LIB = $(ROCKSDB_ROOT)/librocksdb.a
 LIBS = $(ROCKSDB_LIB) -lssl -lcrypto -lpthread -lzstd -lsnappy -llz4 -lz -lbz2 -ldl
 

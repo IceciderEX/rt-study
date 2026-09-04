@@ -51,6 +51,19 @@ public:
     uint64_t GetEndKey() const noexcept { return end_k_; }
     size_t GetNumKeys() const noexcept { return num_keys_; }
 
+    inline uint64_t CountExpectedLiveKeys(uint64_t b, uint64_t e) const noexcept {
+        if (b < start_k_) b = start_k_;
+        if (e > end_k_) e = end_k_;
+        if (b >= e) return 0;
+        uint64_t cnt = 0;
+        size_t idx_b = b - start_k_;
+        size_t idx_e = e - start_k_;
+        for (size_t i = idx_b; i < idx_e; ++i) {
+            if (is_live_[i]) cnt++;
+        }
+        return cnt;
+    }
+
     inline bool IsKeyLive(uint64_t k) const noexcept {
         assert(k >= start_k_ && k < end_k_);
         return is_live_[k - start_k_] != 0;
