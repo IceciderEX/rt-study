@@ -1755,6 +1755,7 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) config_file = argv[++i];
+        else if (config_file.empty() && !arg.empty() && arg[0] != '-') config_file = arg;
         else if (arg == "--exp_id" && i + 1 < argc) config.exp_id = argv[++i];
         else if (arg == "--group_name" && i + 1 < argc) config.group_name = argv[++i];
         else if (arg == "--db_path" && i + 1 < argc) config.db_path = argv[++i];
