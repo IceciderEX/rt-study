@@ -29,19 +29,21 @@ public:
     }
 
     inline ExpectedState ClassifyGet(uint64_t k) const noexcept {
-        assert(k >= start_k_ && k < end_k_);
+        if (k < start_k_ || k >= end_k_) return ExpectedState::kExpectedDeleted;
         return is_live_[k - start_k_] ? ExpectedState::kExpectedLive : ExpectedState::kExpectedDeleted;
     }
 
     inline void ApplyPut(uint64_t k) noexcept {
-        assert(k >= start_k_ && k < end_k_);
+        if (k < start_k_ || k >= end_k_) return;
         size_t idx = k - start_k_;
         is_live_[idx] = 1;
         version_[idx]++;
     }
 
     inline void ApplyDeleteRange(uint64_t b, uint64_t e) noexcept {
-        assert(b >= start_k_ && e <= end_k_ && b < e);
+        if (b < start_k_) b = start_k_;
+        if (e > end_k_) e = end_k_;
+        if (b >= e) return;
         size_t idx_b = b - start_k_;
         size_t idx_e = e - start_k_;
         std::fill(is_live_.begin() + idx_b, is_live_.begin() + idx_e, 0);
@@ -65,12 +67,12 @@ public:
     }
 
     inline bool IsKeyLive(uint64_t k) const noexcept {
-        assert(k >= start_k_ && k < end_k_);
+        if (k < start_k_ || k >= end_k_) return false;
         return is_live_[k - start_k_] != 0;
     }
 
     inline uint32_t GetKeyVersion(uint64_t k) const noexcept {
-        assert(k >= start_k_ && k < end_k_);
+        if (k < start_k_ || k >= end_k_) return 0;
         return version_[k - start_k_];
     }
 

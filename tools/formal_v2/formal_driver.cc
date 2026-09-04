@@ -109,6 +109,11 @@ struct MaterializationEvent {
     uint32_t op_id = 0;
     std::string op_class;
     double latency_us = 0.0;
+    int materialized = 0;
+    int lock_contended = 0;
+    int both_materialized_and_lock_contended = 0;
+    uint64_t active_mem_id = 0;
+    uint64_t active_mem_tombstones = 0;
     double materialization_us = 0.0;
     double lock_wait_us = 0.0;
     double active_mem_prep_us = 0.0;
@@ -122,7 +127,8 @@ struct OpClassAuditStats {
 
     uint64_t materialized_op_count = 0;
     uint64_t lock_contended_op_count = 0;
-    uint64_t materialization_affected_read_count = 0;
+    uint64_t both_materialized_and_lock_op_count = 0;
+    uint64_t materialization_or_lock_affected_reads = 0; // affected_union
 
     uint64_t view_materialization_nanos = 0;
     uint64_t lock_wait_nanos = 0;
@@ -155,13 +161,15 @@ struct OpClassAuditStats {
 
         bool mat = (d.range_tombstone_view_materialization_count > 0);
         bool lock_contended = (d.fragment_build_lock_contended_wait_nanos > 0 || d.fragment_build_lock_contended_count > 0);
+        bool both = (mat && lock_contended);
+        bool union_aff = (mat || lock_contended);
 
         if (mat) materialized_op_count++;
         if (lock_contended) lock_contended_op_count++;
+        if (both) both_materialized_and_lock_op_count++;
 
-        bool is_affected = (d.range_tombstone_view_materialization_count > 0 || d.fragment_build_lock_contended_wait_nanos > 0);
-        if (is_read && is_affected) {
-            materialization_affected_read_count++;
+        if (is_read && union_aff) {
+            materialization_or_lock_affected_reads++;
             affected_read_hist.Record(endpoint_lat_ns);
         }
 
@@ -192,7 +200,8 @@ struct OpClassAuditStats {
         total_endpoint_nanos += o.total_endpoint_nanos;
         materialized_op_count += o.materialized_op_count;
         lock_contended_op_count += o.lock_contended_op_count;
-        materialization_affected_read_count += o.materialization_affected_read_count;
+        both_materialized_and_lock_op_count += o.both_materialized_and_lock_op_count;
+        materialization_or_lock_affected_reads += o.materialization_or_lock_affected_reads;
 
         view_materialization_nanos += o.view_materialization_nanos;
         lock_wait_nanos += o.lock_wait_nanos;
@@ -346,7 +355,8 @@ static void FormatStatsCsvLine(std::ostream& os, const std::string& prefix, cons
        << st.materialized_op_count << ","
        << std::setprecision(4) << mat_rate_per_1k << ","
        << st.lock_contended_op_count << ","
-       << st.materialization_affected_read_count << ","
+       << st.both_materialized_and_lock_op_count << ","
+       << st.materialization_or_lock_affected_reads << ","
        << std::setprecision(2) << aff_p50_us << ","
        << aff_p95_us << ","
        << aff_p99_us << ","
@@ -1020,6 +1030,16 @@ public:
                                 evt.op_id = op.op_id;
                                 evt.op_class = AuditOpClassName(op_cls);
                                 evt.latency_us = lat_ns / 1000.0;
+                                evt.materialized = (delta.range_tombstone_view_materialization_count > 0) ? 1 : 0;
+                                evt.lock_contended = (delta.fragment_build_lock_contended_wait_nanos > 0 || delta.fragment_build_lock_contended_count > 0) ? 1 : 0;
+                                evt.both_materialized_and_lock_contended = (evt.materialized && evt.lock_contended) ? 1 : 0;
+                                if (evt.materialized) {
+                                    evt.active_mem_id = snap_after.last_materialization_memtable_id;
+                                    evt.active_mem_tombstones = snap_after.last_materialization_tombstone_count;
+                                } else {
+                                    evt.active_mem_id = snap_after.last_contended_memtable_id;
+                                    evt.active_mem_tombstones = snap_after.last_contended_tombstone_count;
+                                }
                                 evt.materialization_us = delta.range_tombstone_view_materialization_nanos / 1000.0;
                                 evt.lock_wait_us = delta.fragment_build_lock_contended_wait_nanos / 1000.0;
                                 evt.active_mem_prep_us = delta.active_mem_tombstone_iter_prepare_nanos / 1000.0;
@@ -1321,25 +1341,51 @@ public:
 
             for (int p = 0; p < 3; ++p) {
                 for (size_t c = 0; c < static_cast<size_t>(AuditOpClass::kCount); ++c) {
-                    uint64_t sum_ops = 0, sum_endpoint_ns = 0, sum_mat_ops = 0, sum_lock_ops = 0, sum_aff_ops = 0;
+                    uint64_t sum_ops = 0, sum_endpoint_ns = 0, sum_mat_ops = 0, sum_lock_ops = 0, sum_both_ops = 0, sum_aff_ops = 0;
                     uint64_t sum_mat_ns = 0, sum_lock_ns = 0, sum_inval_cnt = 0;
 
                     for (int w = 0; w < num_workers_; ++w) {
                         const auto& ws = worker_op_stats[w][p][c];
+                        // Hard check Level 1: Worker level affected_union identity
+                        if (ws.materialization_or_lock_affected_reads !=
+                            ws.materialized_op_count + ws.lock_contended_op_count - ws.both_materialized_and_lock_op_count)
+                        {
+                            std::cerr << "[FATAL AUDIT ERROR] Worker " << w << " Phase " << p << " Class "
+                                      << AuditOpClassName(static_cast<AuditOpClass>(c))
+                                      << " affected_union != mat + lock - both! (" << ws.materialization_or_lock_affected_reads
+                                      << " != " << ws.materialized_op_count << " + " << ws.lock_contended_op_count
+                                      << " - " << ws.both_materialized_and_lock_op_count << ")\n";
+                            return false;
+                        }
+
                         sum_ops += ws.op_count;
                         sum_endpoint_ns += ws.total_endpoint_nanos;
                         sum_mat_ops += ws.materialized_op_count;
                         sum_lock_ops += ws.lock_contended_op_count;
-                        sum_aff_ops += ws.materialization_affected_read_count;
+                        sum_both_ops += ws.both_materialized_and_lock_op_count;
+                        sum_aff_ops += ws.materialization_or_lock_affected_reads;
                         sum_mat_ns += ws.view_materialization_nanos;
                         sum_lock_ns += ws.lock_wait_nanos;
                         sum_inval_cnt += ws.memtable_cache_invalidation_count;
                     }
 
                     const auto& ps = phase_summaries[p][c];
+                    // Hard check Level 2: Phase summary affected_union identity
+                    if (ps.materialization_or_lock_affected_reads !=
+                        ps.materialized_op_count + ps.lock_contended_op_count - ps.both_materialized_and_lock_op_count)
+                    {
+                        std::cerr << "[FATAL AUDIT ERROR] Phase " << p << " Class "
+                                  << AuditOpClassName(static_cast<AuditOpClass>(c))
+                                  << " affected_union != mat + lock - both! (" << ps.materialization_or_lock_affected_reads
+                                  << " != " << ps.materialized_op_count << " + " << ps.lock_contended_op_count
+                                  << " - " << ps.both_materialized_and_lock_op_count << ")\n";
+                        return false;
+                    }
+
                     if (sum_ops != ps.op_count || sum_endpoint_ns != ps.total_endpoint_nanos ||
                         sum_mat_ops != ps.materialized_op_count || sum_lock_ops != ps.lock_contended_op_count ||
-                        sum_aff_ops != ps.materialization_affected_read_count || sum_mat_ns != ps.view_materialization_nanos ||
+                        sum_both_ops != ps.both_materialized_and_lock_op_count ||
+                        sum_aff_ops != ps.materialization_or_lock_affected_reads || sum_mat_ns != ps.view_materialization_nanos ||
                         sum_lock_ns != ps.lock_wait_nanos || sum_inval_cnt != ps.memtable_cache_invalidation_count)
                     {
                         std::cerr << "[FATAL AUDIT CONSISTENCY ERROR] sum(worker snapshots) != phase summary for Phase "
@@ -1347,10 +1393,18 @@ public:
                         return false;
                     }
                 }
+
+                // Phase total checks
+                if (phase_read_totals[p].materialization_or_lock_affected_reads !=
+                    phase_read_totals[p].materialized_op_count + phase_read_totals[p].lock_contended_op_count - phase_read_totals[p].both_materialized_and_lock_op_count)
+                {
+                    std::cerr << "[FATAL AUDIT ERROR] Phase " << p << " TOTAL_READS affected_union identity violated!\n";
+                    return false;
+                }
             }
 
             for (size_t c = 0; c < static_cast<size_t>(AuditOpClass::kCount); ++c) {
-                uint64_t sum_ops = 0, sum_endpoint_ns = 0, sum_mat_ops = 0, sum_lock_ops = 0, sum_aff_ops = 0;
+                uint64_t sum_ops = 0, sum_endpoint_ns = 0, sum_mat_ops = 0, sum_lock_ops = 0, sum_both_ops = 0, sum_aff_ops = 0;
                 uint64_t sum_mat_ns = 0, sum_lock_ns = 0, sum_inval_cnt = 0;
 
                 for (int p = 0; p < 3; ++p) {
@@ -1359,16 +1413,27 @@ public:
                     sum_endpoint_ns += ps.total_endpoint_nanos;
                     sum_mat_ops += ps.materialized_op_count;
                     sum_lock_ops += ps.lock_contended_op_count;
-                    sum_aff_ops += ps.materialization_affected_read_count;
+                    sum_both_ops += ps.both_materialized_and_lock_op_count;
+                    sum_aff_ops += ps.materialization_or_lock_affected_reads;
                     sum_mat_ns += ps.view_materialization_nanos;
                     sum_lock_ns += ps.lock_wait_nanos;
                     sum_inval_cnt += ps.memtable_cache_invalidation_count;
                 }
 
                 const auto& rs = run_summary[c];
+                // Hard check Level 3: Run summary affected_union identity
+                if (rs.materialization_or_lock_affected_reads !=
+                    rs.materialized_op_count + rs.lock_contended_op_count - rs.both_materialized_and_lock_op_count)
+                {
+                    std::cerr << "[FATAL AUDIT ERROR] Run summary Class " << AuditOpClassName(static_cast<AuditOpClass>(c))
+                              << " affected_union != mat + lock - both!\n";
+                    return false;
+                }
+
                 if (sum_ops != rs.op_count || sum_endpoint_ns != rs.total_endpoint_nanos ||
                     sum_mat_ops != rs.materialized_op_count || sum_lock_ops != rs.lock_contended_op_count ||
-                    sum_aff_ops != rs.materialization_affected_read_count || sum_mat_ns != rs.view_materialization_nanos ||
+                    sum_both_ops != rs.both_materialized_and_lock_op_count ||
+                    sum_aff_ops != rs.materialization_or_lock_affected_reads || sum_mat_ns != rs.view_materialization_nanos ||
                     sum_lock_ns != rs.lock_wait_nanos || sum_inval_cnt != rs.memtable_cache_invalidation_count)
                 {
                     std::cerr << "[FATAL AUDIT CONSISTENCY ERROR] sum(phase summaries) != run summary for Class "
@@ -1376,13 +1441,21 @@ public:
                     return false;
                 }
             }
-            std::cout << "[Audit Processing] PASSED All Summation and TLS Identity Checks with 100% precision.\n";
+
+            if (run_read_total.materialization_or_lock_affected_reads !=
+                run_read_total.materialized_op_count + run_read_total.lock_contended_op_count - run_read_total.both_materialized_and_lock_op_count)
+            {
+                std::cerr << "[FATAL AUDIT ERROR] Run total TOTAL_READS affected_union identity violated!\n";
+                return false;
+            }
+
+            std::cout << "[Audit Processing] PASSED All Summation, TLS, and 3-Level affected_union Identities with 100% precision.\n";
 
             // 4. Dump CSV 1: audit_worker_snapshots.csv
             std::string worker_snap_path = config_.audit_output_dir + "/audit_worker_snapshots.csv";
             std::ofstream fws(worker_snap_path);
             fws << "exp_id,rep,phase,worker_id,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,"
-                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,"
+                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,both_count,materialization_or_lock_affected_reads,"
                 << "affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,"
                 << "materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,"
                 << "imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,"
@@ -1405,7 +1478,7 @@ public:
             std::string phase_sum_path = config_.audit_output_dir + "/audit_phase_summary.csv";
             std::ofstream fps(phase_sum_path);
             fps << "exp_id,rep,phase,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,"
-                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,"
+                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,both_count,materialization_or_lock_affected_reads,"
                 << "affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,"
                 << "materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,"
                 << "imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,"
@@ -1431,7 +1504,8 @@ public:
             // 6. Dump CSV 3: audit_materialization_events.csv
             std::string mat_events_path = config_.audit_output_dir + "/audit_materialization_events.csv";
             std::ofstream fme(mat_events_path);
-            fme << "run_id,rep,phase,worker,op_id,op_class,latency_us,materialization_us,lock_wait_us,"
+            fme << "run_id,rep,phase,worker,op_id,op_class,latency_us,materialized,lock_contended,both_materialized_and_lock_contended,"
+                << "active_mem_id,active_mem_tombstones,materialization_us,lock_wait_us,"
                 << "active_mem_prep_us,active_mem_lookup_us,sst_iter_construct_us\n";
 
             uint64_t total_mat_events = 0;
@@ -1440,6 +1514,8 @@ public:
                     fme << ev.run_id << "," << ev.rep << "," << ev.phase << "," << ev.worker << ","
                         << ev.op_id << "," << ev.op_class << ","
                         << std::fixed << std::setprecision(2) << ev.latency_us << ","
+                        << ev.materialized << "," << ev.lock_contended << "," << ev.both_materialized_and_lock_contended << ","
+                        << ev.active_mem_id << "," << ev.active_mem_tombstones << ","
                         << ev.materialization_us << "," << ev.lock_wait_us << ","
                         << ev.active_mem_prep_us << "," << ev.active_mem_lookup_us << ","
                         << ev.sst_iter_construct_us << "\n";
@@ -1453,10 +1529,11 @@ public:
             std::string run_sum_path = config_.audit_output_dir + "/audit_run_summary.csv";
             std::ofstream frs(run_sum_path);
             frs << "exp_id,rep,total_ops,total_reads,materialized_reads,overall_materialization_rate_per_1k,"
-                << "lock_contended_reads,materialization_or_lock_affected_reads,overall_read_latency_ms,total_materialization_ms,"
+                << "lock_contended_reads,both_reads,materialization_or_lock_affected_reads,overall_read_latency_ms,total_materialization_ms,"
                 << "total_lock_wait_ms,overall_materialization_and_lock_ratio,total_cache_invalidations,"
                 << "phase_a_materialization_ms,phase_b_materialization_ms,phase_c_materialization_ms,"
                 << "phase_a_materialization_or_lock_affected_reads,phase_b_materialization_or_lock_affected_reads,phase_c_materialization_or_lock_affected_reads,"
+                << "phase_a_both_reads,phase_b_both_reads,phase_c_both_reads,"
                 << "phase_a_invalidations,phase_b_invalidations,phase_c_invalidations,verification_status\n";
 
             double overall_mat_rate = (run_read_total.op_count > 0) ?
@@ -1470,7 +1547,8 @@ public:
                 << run_read_total.materialized_op_count << ","
                 << std::fixed << std::setprecision(4) << overall_mat_rate << ","
                 << run_read_total.lock_contended_op_count << ","
-                << run_read_total.materialization_affected_read_count << ","
+                << run_read_total.both_materialized_and_lock_op_count << ","
+                << run_read_total.materialization_or_lock_affected_reads << ","
                 << (run_read_total.total_endpoint_nanos / 1e6) << ","
                 << (run_read_total.view_materialization_nanos / 1e6) << ","
                 << (run_read_total.lock_wait_nanos / 1e6) << ","
@@ -1479,9 +1557,12 @@ public:
                 << std::setprecision(4) << (phase_read_totals[0].view_materialization_nanos / 1e6) << ","
                 << (phase_read_totals[1].view_materialization_nanos / 1e6) << ","
                 << (phase_read_totals[2].view_materialization_nanos / 1e6) << ","
-                << phase_read_totals[0].materialization_affected_read_count << ","
-                << phase_read_totals[1].materialization_affected_read_count << ","
-                << phase_read_totals[2].materialization_affected_read_count << ","
+                << phase_read_totals[0].materialization_or_lock_affected_reads << ","
+                << phase_read_totals[1].materialization_or_lock_affected_reads << ","
+                << phase_read_totals[2].materialization_or_lock_affected_reads << ","
+                << phase_read_totals[0].both_materialized_and_lock_op_count << ","
+                << phase_read_totals[1].both_materialized_and_lock_op_count << ","
+                << phase_read_totals[2].both_materialized_and_lock_op_count << ","
                 << phase_all_totals[0].memtable_cache_invalidation_count << ","
                 << phase_all_totals[1].memtable_cache_invalidation_count << ","
                 << phase_all_totals[2].memtable_cache_invalidation_count << ",PASS\n";
