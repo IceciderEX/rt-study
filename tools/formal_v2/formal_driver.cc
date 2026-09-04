@@ -1382,7 +1382,7 @@ public:
             std::string worker_snap_path = config_.audit_output_dir + "/audit_worker_snapshots.csv";
             std::ofstream fws(worker_snap_path);
             fws << "exp_id,rep,phase,worker_id,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,"
-                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,affected_reads_count,"
+                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,"
                 << "affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,"
                 << "materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,"
                 << "imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,"
@@ -1405,7 +1405,7 @@ public:
             std::string phase_sum_path = config_.audit_output_dir + "/audit_phase_summary.csv";
             std::ofstream fps(phase_sum_path);
             fps << "exp_id,rep,phase,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,"
-                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,affected_reads_count,"
+                << "materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,"
                 << "affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,"
                 << "materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,"
                 << "imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,"
@@ -1453,10 +1453,10 @@ public:
             std::string run_sum_path = config_.audit_output_dir + "/audit_run_summary.csv";
             std::ofstream frs(run_sum_path);
             frs << "exp_id,rep,total_ops,total_reads,materialized_reads,overall_materialization_rate_per_1k,"
-                << "lock_contended_reads,affected_reads,overall_read_latency_ms,total_materialization_ms,"
+                << "lock_contended_reads,materialization_or_lock_affected_reads,overall_read_latency_ms,total_materialization_ms,"
                 << "total_lock_wait_ms,overall_materialization_and_lock_ratio,total_cache_invalidations,"
                 << "phase_a_materialization_ms,phase_b_materialization_ms,phase_c_materialization_ms,"
-                << "phase_a_affected_reads,phase_b_affected_reads,phase_c_affected_reads,"
+                << "phase_a_materialization_or_lock_affected_reads,phase_b_materialization_or_lock_affected_reads,phase_c_materialization_or_lock_affected_reads,"
                 << "phase_a_invalidations,phase_b_invalidations,phase_c_invalidations,verification_status\n";
 
             double overall_mat_rate = (run_read_total.op_count > 0) ?

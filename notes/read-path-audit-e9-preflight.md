@@ -28,7 +28,7 @@
 | `e9_t0_audit`   | **ENABLED**  | 0.4089 | 7.0046 | 12.3732 | **19.7867** | 15,161.7 |
 | **净差异 (Delta)** | - | -0.0313 s | -0.1327 s | +0.6186 s | **+0.4546 s (+2.35%)** | -2.30% |
 
-**结论**：在 8 线程并发执行 300,000 操作的高负载下，全量原子 TLS 采样仅引入 **+2.35%** 的前台运行耗时净增量，单操作摊销开销仅约 $0.26 \ \mu\text{s}$，证明探针开销极低，机制测量数据未扰动真实并发执行流。
+> 在本次同配置单轮配对观察中，启用审计的前台耗时较关闭审计高 2.35%；该差异可能包含运行波动，故审计运行的吞吐与延迟仅用于机制归因，不替代正式性能比较。
 
 ---
 
@@ -59,43 +59,43 @@
 
 ### 3.1 `audit_run_summary.csv` (全貌)
 ```csv
-exp_id,rep,total_ops,total_reads,materialized_reads,overall_materialization_rate_per_1k,lock_contended_reads,affected_reads,overall_read_latency_ms,total_materialization_ms,total_lock_wait_ms,overall_materialization_and_lock_ratio,total_cache_invalidations,phase_a_materialization_ms,phase_b_materialization_ms,phase_c_materialization_ms,phase_a_affected_reads,phase_b_affected_reads,phase_c_affected_reads,phase_a_invalidations,phase_b_invalidations,phase_c_invalidations,verification_status
+exp_id,rep,total_ops,total_reads,materialized_reads,overall_materialization_rate_per_1k,lock_contended_reads,materialization_or_lock_affected_reads,overall_read_latency_ms,total_materialization_ms,total_lock_wait_ms,overall_materialization_and_lock_ratio,total_cache_invalidations,phase_a_materialization_ms,phase_b_materialization_ms,phase_c_materialization_ms,phase_a_materialization_or_lock_affected_reads,phase_b_materialization_or_lock_affected_reads,phase_c_materialization_or_lock_affected_reads,phase_a_invalidations,phase_b_invalidations,phase_c_invalidations,verification_status
 e9_t0_audit,1,300000,190000,9091,47.8474,34850,43941,135971.7082,27860.4206,98607.4332,0.930105,10000,162.1678,13011.9806,14686.2722,7928,20013,16000,1200,6000,2800,PASS
 ```
 
 ### 3.2 `audit_phase_summary.csv` 表头与前 10 行
 ```csv
-exp_id,rep,phase,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,materialized_ops,materialization_rate_per_1k,lock_contended_ops,affected_reads_count,affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,reseek_count,boundary_advance_count,child_next_count,covered_skip_count,cache_invalidation_count
-e9_t0_audit,1,0,GetLive,58535,1171.9168,6.09,122.28,249.37,883,15.0850,4883,5766,117.43,332.19,401.04,120.9304,620.7845,0.632908,767.8931,18.8921,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
-e9_t0_audit,1,0,GetDeleted,1465,32.3245,2.46,183.97,315.27,23,15.6997,132,155,169.51,407.12,458.53,4.2378,23.8329,0.868403,28.8911,0.6300,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
-e9_t0_audit,1,0,ScanIntersect,2651,194.5843,54.49,235.42,349.48,33,12.4481,254,287,200.18,464.44,524.78,4.8052,40.4578,0.232614,0.0000,0.0000,0.0000,0.0000,47.8821,0.1509,5.5529,5425,5096,585,585,0
-e9_t0_audit,1,0,ScanNonIntersect,17349,1223.8242,55.52,167.98,296.02,255,14.6983,1465,1720,154.98,392.51,458.53,32.1944,179.0163,0.172583,0.0000,0.0000,0.0000,0.0000,224.2384,0.9238,34.8211,44,45,7,7,0
-e9_t0_audit,1,0,Put,18800,208.1255,8.56,28.69,42.97,0,0.0000,0,0,0.00,0.00,0.00,0.0000,0.0000,0.000000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
-e9_t0_audit,1,0,DeleteRange,1200,40.4552,30.79,53.06,74.49,0,0.0000,0,0,0.00,0.00,0.00,0.0000,0.0000,0.000000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,1200
-e9_t0_audit,1,0,TOTAL_READS,80000,2622.6498,7.77,139.98,267.53,1194,14.9250,6734,7928,132.88,362.64,415.63,162.1678,864.0915,0.391306,796.7842,19.5221,0.0000,0.0000,272.1205,1.0747,40.3740,5469,5141,592,592,0
-e9_t0_audit,1,0,TOTAL_ALL,100000,2871.2305,8.21,113.36,251.04,1194,11.9400,6734,7928,132.88,362.64,415.63,162.1678,864.0915,0.357428,796.7842,19.5221,0.0000,0.0000,272.1205,1.0747,40.3740,5469,5141,592,592,1200
-e9_t0_audit,1,1,GetLive,16858,25028.7180,789.05,4423.74,4754.50,2945,174.6945,8374,11319,2044.17,4535.02,4821.23,7306.3917,17019.9575,0.971937,24395.7363,39.3879,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
-e9_t0_audit,1,1,GetDeleted,3142,5308.7238,789.05,4485.84,4748.75,542,172.5016,1456,1998,3007.24,4612.62,4859.39,1606.5273,3632.2598,0.986827,5251.4648,7.3916,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
+exp_id,rep,phase,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,reseek_count,boundary_advance_count,child_next_count,covered_skip_count,cache_invalidation_count
+e9_t0_audit,1,0,GetLive,58535,1171.9198,6.09,116.50,249.37,883,15.0850,4883,5766,117.42,309.40,401.01,120.9275,620.7759,0.632896,761.9491,17.7756,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
+e9_t0_audit,1,0,GetDeleted,1465,32.3249,2.46,174.62,315.27,23,15.6997,132,155,169.52,384.36,407.13,4.2360,23.8295,0.868233,28.6124,0.5914,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
+e9_t0_audit,1,0,ScanIntersect,2651,194.5838,54.49,206.04,349.48,33,12.4481,254,287,200.25,388.10,464.35,4.8110,40.4627,0.232670,0.0000,0.0000,0.0000,0.0000,47.3540,0.1500,5.3178,5409,5096,585,585,0
+e9_t0_audit,1,0,ScanNonIntersect,17349,1223.8178,55.52,154.98,296.02,255,14.6983,1465,1720,154.98,355.46,458.48,32.1916,179.0181,0.172583,0.0000,0.0000,0.0000,0.0000,224.2943,0.8624,33.8756,43,45,7,7,0
+e9_t0_audit,1,0,Put,18800,208.1284,8.56,29.02,42.97,0,0.0000,0,0,0,0.00,0.00,0.00,0.0000,0.0000,0.000000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
+e9_t0_audit,1,0,DeleteRange,1200,40.4579,30.79,53.64,74.49,0,0.0000,0,0,0,0.00,0.00,0.00,0.0000,0.0000,0.000000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,1200
+e9_t0_audit,1,0,TOTAL_READS,80000,2622.6463,7.77,132.31,267.53,1194,14.9250,6734,7928,132.95,323.99,415.61,162.1662,864.0862,0.391304,790.5614,18.3669,0.0000,0.0000,271.6482,1.0123,39.1933,5452,5141,592,592,0
+e9_t0_audit,1,0,TOTAL_ALL,100000,2871.2325,8.21,112.00,251.04,1194,11.9400,6734,7928,132.95,323.99,415.61,162.1662,864.0862,0.357426,790.5614,18.3669,0.0000,0.0000,271.6482,1.0123,39.1933,5452,5141,592,592,1200
+e9_t0_audit,1,1,GetLive,16858,25028.7166,789.05,4410.36,4754.50,2945,174.6945,8374,11319,2044.21,4529.52,4821.23,7306.3883,17019.9612,0.971938,24409.1973,37.3138,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
+e9_t0_audit,1,1,GetDeleted,3142,5308.7157,789.05,4513.09,4748.75,542,172.5016,1456,1998,3007.17,4609.82,4859.36,1606.5285,3632.2639,0.986829,5254.5390,7.2899,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
 ```
 
 ### 3.3 `audit_materialization_events.csv` 表头与前 10 行
 ```csv
 run_id,rep,phase,worker,op_id,op_class,latency_us,materialization_us,lock_wait_us,active_mem_prep_us,active_mem_lookup_us,sst_iter_construct_us
-e9_t0_audit,1,0,0,84,GetLive,22.79,6.58,0.00,10.19,0.25,0.00
-e9_t0_audit,1,0,0,151,GetLive,17.96,7.13,0.00,7.97,0.16,0.00
-e9_t0_audit,1,0,0,157,GetLive,21.23,6.51,0.00,9.41,0.23,0.00
-e9_t0_audit,1,0,0,185,GetLive,21.80,7.32,0.00,10.15,0.25,0.00
-e9_t0_audit,1,0,0,327,GetLive,16.72,10.35,0.00,10.99,0.14,0.00
-e9_t0_audit,1,0,0,359,GetLive,15.49,0.00,1.27,2.13,0.47,0.00
-e9_t0_audit,1,0,0,419,GetLive,30.02,0.00,18.09,19.02,0.30,0.00
-e9_t0_audit,1,0,0,439,GetLive,28.38,0.00,15.58,16.65,0.32,0.00
-e9_t0_audit,1,0,0,467,GetDeleted,30.20,0.00,27.30,28.20,0.32,0.00
-e9_t0_audit,1,0,0,486,GetLive,35.24,0.00,24.25,25.26,0.33,0.00
+e9_t0_audit,1,0,0,92,ScanNonIntersect,105.21,0.00,0.26,0.00,0.00,2.04
+e9_t0_audit,1,0,0,117,GetLive,32.55,0.00,13.17,14.34,0.32,0.00
+e9_t0_audit,1,0,0,127,GetLive,43.01,0.00,24.43,26.95,0.36,0.00
+e9_t0_audit,1,0,0,167,GetLive,27.25,0.00,11.37,14.52,0.32,0.00
+e9_t0_audit,1,0,0,183,ScanNonIntersect,119.17,0.00,27.53,0.00,0.00,5.27
+e9_t0_audit,1,0,0,219,GetLive,25.26,0.00,10.82,11.60,0.31,0.00
+e9_t0_audit,1,0,0,263,GetLive,24.78,9.25,0.00,12.53,0.14,0.00
+e9_t0_audit,1,0,0,280,GetLive,30.98,0.00,16.98,17.91,0.26,0.00
+e9_t0_audit,1,0,0,340,GetLive,23.95,9.72,0.00,12.06,0.20,0.00
+e9_t0_audit,1,0,0,365,ScanNonIntersect,116.89,0.00,22.33,0.00,0.00,2.48
 ```
 
 ### 3.4 `audit_worker_snapshots.csv` 表头与前 5 行
 ```csv
-exp_id,rep,phase,worker_id,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,materialized_ops,materialization_rate_per_1k,lock_contended_ops,affected_reads_count,affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,reseek_count,boundary_advance_count,child_next_count,covered_skip_count,cache_invalidation_count
+exp_id,rep,phase,worker_id,op_class,op_count,total_latency_ms,p50_us,p95_us,p99_us,materialized_ops,materialization_rate_per_1k,lock_contended_ops,materialization_or_lock_affected_reads,affected_p50_us,affected_p95_us,affected_p99_us,view_materialization_ms,lock_wait_ms,materialization_and_lock_ratio,active_mem_prep_ms,active_mem_lookup_ms,imm_mem_prep_ms,imm_mem_lookup_ms,active_mem_iter_construct_ms,imm_mem_iter_construct_ms,sst_iter_construct_ms,reseek_count,boundary_advance_count,child_next_count,covered_skip_count,cache_invalidation_count
 e9_t0_audit,1,0,0,GetLive,7314,138.3172,5.94,112.13,248.92,61,8.3402,611,672,121.84,288.93,382.04,7.5407,79.5667,0.629765,89.3541,2.2157,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
 e9_t0_audit,1,0,0,GetDeleted,186,3.8634,2.19,180.00,287.88,1,5.3763,20,21,153.85,287.88,304.57,0.1435,3.2365,0.874875,3.4427,0.0666,0.0000,0.0000,0.0000,0.0000,0.0000,0,0,0,0,0
 e9_t0_audit,1,0,0,ScanIntersect,335,24.2874,55.32,211.73,324.38,2,5.9701,34,36,200.37,352.67,379.27,0.4181,5.2274,0.232445,0.0000,0.0000,0.0000,0.0000,5.8777,0.0182,0.6423,661,640,73,73,0
@@ -109,7 +109,7 @@ e9_t0_audit,1,0,0,Put,2350,26.0021,8.20,30.29,44.45,0,0.0000,0,0,0.00,0.00,0.00,
 
 汇总自 `audit_phase_summary.csv`（8 个 Worker 并发聚合）：
 
-| 阶段 (Phase) | 操作类别 (Op Class) | 操作数 (Ops) | 端到端总时间 (ms) | P50 延迟 (μs) | P99 延迟 (μs) | 物化触发操作数 (次) | 每千读物化率 (/1k) | 锁等待操作数 (次) | 受影响操作数 (受损读占比) | 受影响读 P50 (μs) | 受影响读 P99 (μs) | 累计物化耗时 (ms) | 累计锁等待耗时 (ms) | 物化+锁占读总时间比 |
+| 阶段 (Phase) | 操作类别 (Op Class) | 操作数 (Ops) | 端到端总时间 (ms) | P50 延迟 (μs) | P99 延迟 (μs) | 物化触发操作数 (次) | 每千读物化率 (/1k) | 锁等待操作数 (次) | 受物化或锁波及读数 (占比) | 受波及读 P50 (μs) | 受波及读 P99 (μs) | 累计物化耗时 (ms) | 累计锁等待耗时 (ms) | 物化+锁占读总时间比 |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Phase A (读敏感)** | `GetLive` | 58,535 | 1,171.9 | 6.09 | 249.4 | 883 | 15.1 | 4,883 | 5,766 (9.8%) | 117.4 | 401.0 | 120.9 | 620.8 | **63.3%** |
 | Phase A | `GetDeleted` | 1,465 | 32.3 | 2.46 | 315.3 | 23 | 15.7 | 132 | 155 (10.6%) | 169.5 | 407.1 | 4.2 | 23.8 | **86.8%** |
@@ -149,7 +149,7 @@ e9_t0_audit,1,0,0,Put,2350,26.0021,8.20,30.29,44.45,0,0.0000,0,0,0.00,0.00,0.00,
    - 在 Phase B 中，多达 **14,882 次读操作（占读总数 49.6%）** 经历了互斥锁争用；在 Phase C 中有 **13,234 次（占读总数 16.5%）** 经历了锁争用；
 4. **读时延结构中物化与锁等待占主导比例**：
    - 在 Phase B 和 Phase C 中，$\text{materialization\_and\_lock\_ratio}$ 均达到了 **94.1%**；全流程读端到端耗时中有 **93.0%** 消耗在范围墓碑视图物化与互斥锁排队等待中；
-   - 受物化或锁争用波及的读操作（`affected_reads`，共 43,941 次），其延迟从基线微秒级（Phase A 未受损读 P50 约 6~7 μs）恶化至毫秒级（Phase B 受损读 P50 为 **2.23 ms**，Phase C 受损读 P50 为 **5.79 ms**，P99 达到 **7.28 ms**）。
+   - 受物化或锁争用波及的读操作（`materialization_or_lock_affected_reads`，共 43,941 次），其延迟从基线微秒级（Phase A 未受损读 P50 约 6~7 μs）恶化至毫秒级（Phase B 受损读 P50 为 **2.23 ms**，Phase C 受损读 P50 为 **5.79 ms**，P99 达到 **7.28 ms**）。
 
 ### 2. 合理但待验证的解释 (Reasonable but Unverified Hypotheses)
 1. **T0 累积效应放大了解构耗时与锁排队深度**：
