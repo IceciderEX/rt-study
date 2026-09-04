@@ -73,6 +73,8 @@ struct PhaseStatsAgg {
     uint64_t scan_total_keys_found = 0;
     double scan_us_per_key = 0.0;
     uint64_t scan_limit_truncated_count = 0;
+    uint64_t num_l0_files = 0;
+    uint64_t pending_compaction_bytes = 0;
 };
 
 // =========================================================================
@@ -112,6 +114,7 @@ struct MaterializationEvent {
     int materialized = 0;
     int lock_contended = 0;
     int both_materialized_and_lock_contended = 0;
+    int affected_union = 0;
     uint64_t active_mem_id = 0;
     uint64_t active_mem_tombstones = 0;
     double materialization_us = 0.0;
@@ -1021,7 +1024,9 @@ public:
 
                             worker_op_stats[w][p][static_cast<size_t>(op_cls)].AddDelta(delta, lat_ns, is_read);
 
-                            if (is_read && (delta.range_tombstone_view_materialization_count > 0 || delta.fragment_build_lock_contended_wait_nanos > 0)) {
+                            if (is_read && (delta.range_tombstone_view_materialization_count > 0 ||
+                                            delta.fragment_build_lock_contended_wait_nanos > 0 ||
+                                            delta.fragment_build_lock_contended_count > 0)) {
                                 MaterializationEvent evt;
                                 evt.run_id = config_.exp_id;
                                 evt.rep = config_.rep;
@@ -1033,6 +1038,7 @@ public:
                                 evt.materialized = (delta.range_tombstone_view_materialization_count > 0) ? 1 : 0;
                                 evt.lock_contended = (delta.fragment_build_lock_contended_wait_nanos > 0 || delta.fragment_build_lock_contended_count > 0) ? 1 : 0;
                                 evt.both_materialized_and_lock_contended = (evt.materialized && evt.lock_contended) ? 1 : 0;
+                                evt.affected_union = (evt.materialized || evt.lock_contended) ? 1 : 0;
                                 if (evt.materialized) {
                                     evt.active_mem_id = snap_after.last_materialization_memtable_id;
                                     evt.active_mem_tombstones = snap_after.last_materialization_tombstone_count;
@@ -1132,6 +1138,14 @@ public:
 
             if (agg.scan_total_keys_found > 0) {
                 agg.scan_us_per_key = (p_hist_scan.GetSumNs() / 1000.0) / agg.scan_total_keys_found;
+            }
+
+            std::string l0_str, pending_str;
+            if (db_->GetProperty("rocksdb.num-files-at-level0", &l0_str)) {
+                try { agg.num_l0_files = std::stoull(l0_str); } catch (...) {}
+            }
+            if (db_->GetProperty("rocksdb.estimate-pending-compaction-bytes", &pending_str)) {
+                try { agg.pending_compaction_bytes = std::stoull(pending_str); } catch (...) {}
             }
 
             phase_results.push_back(agg);
@@ -1504,7 +1518,7 @@ public:
             // 6. Dump CSV 3: audit_materialization_events.csv
             std::string mat_events_path = config_.audit_output_dir + "/audit_materialization_events.csv";
             std::ofstream fme(mat_events_path);
-            fme << "run_id,rep,phase,worker,op_id,op_class,latency_us,materialized,lock_contended,both_materialized_and_lock_contended,"
+            fme << "run_id,rep,phase,worker,op_id,op_class,latency_us,materialized,lock_contended,both_materialized_and_lock_contended,affected_union,"
                 << "active_mem_id,active_mem_tombstones,materialization_us,lock_wait_us,"
                 << "active_mem_prep_us,active_mem_lookup_us,sst_iter_construct_us\n";
 
@@ -1515,6 +1529,7 @@ public:
                         << ev.op_id << "," << ev.op_class << ","
                         << std::fixed << std::setprecision(2) << ev.latency_us << ","
                         << ev.materialized << "," << ev.lock_contended << "," << ev.both_materialized_and_lock_contended << ","
+                        << ev.affected_union << ","
                         << ev.active_mem_id << "," << ev.active_mem_tombstones << ","
                         << ev.materialization_us << "," << ev.lock_wait_us << ","
                         << ev.active_mem_prep_us << "," << ev.active_mem_lookup_us << ","
@@ -1694,7 +1709,8 @@ public:
             std::ofstream fphases(config_.phases_csv, std::ios::app);
             if (phases_header) {
                 fphases << "exp_id,group_name,threshold,phase,elapsed_sec,completed_ops,true_phase_iops,"
-                        << "scan_us_per_key,scan_p99_us,scan_intersect_p99_us,scan_non_intersect_p99_us,get_live_p99_us,get_del_p99_us,put_p99_us,scan_limit_truncated_count\n";
+                        << "scan_us_per_key,scan_p99_us,scan_intersect_p99_us,scan_non_intersect_p99_us,get_live_p99_us,get_del_p99_us,put_p99_us,scan_limit_truncated_count,"
+                        << "num_l0_files,pending_compaction_bytes\n";
             }
             for (const auto& pr : phase_results) {
                 fphases << config_.exp_id << "," << config_.group_name << "," << config_.memtable_max_range_deletions << ","
@@ -1703,7 +1719,8 @@ public:
                         << pr.scan_us_per_key << "," << pr.scan_p99 << ","
                         << pr.scan_intersect_p99 << "," << pr.scan_non_intersect_p99 << ","
                         << pr.get_live_p99 << "," << pr.get_del_p99 << "," << pr.put_p99 << ","
-                        << pr.scan_limit_truncated_count << "\n";
+                        << pr.scan_limit_truncated_count << ","
+                        << pr.num_l0_files << "," << pr.pending_compaction_bytes << "\n";
             }
         }
 
