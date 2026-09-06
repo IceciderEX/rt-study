@@ -401,8 +401,8 @@ int main(int argc, char** argv) {
     rocksdb::ColumnFamilyData* cfd =
         static_cast<rocksdb::ColumnFamilyHandleImpl*>(db->DefaultColumnFamily())->cfd();
 
-    // 5. Read-only Warmup: 50,000 GetLive across 8 workers
-    std::cout << "  Executing read-only warm-up (50,000 GetLive)...\n";
+    // 5. Deterministic Read-only Warmup: 10,000 GetLive across 8 workers (1,250 each) from live region
+    std::cout << "  Executing deterministic read-only warm-up (10,000 GetLive from live region)...\n";
     rocksdb::AMTVTimelineLogger::Get().SetPhase("WARMUP");
     {
         std::vector<std::thread> warmup_workers;
@@ -412,8 +412,8 @@ int main(int argc, char** argv) {
                 rocksdb::ReadOptions ropts;
                 std::string val;
                 uint64_t base_k = w * 62500;
-                for (int i = 0; i < 6250; ++i) {
-                    uint64_t k = base_k + (i % 37500);
+                for (uint64_t i = 0; i < 1250; ++i) {
+                    uint64_t k = base_k + ((i * 17) % 37500);
                     std::string key = FormatKey(k);
                     rocksdb::Status ws = db->Get(ropts, key, &val);
                     CHECK_INVARIANT(ws.ok(), "Warmup Get failed at key %lu: %s", k, ws.ToString().c_str());
@@ -421,6 +421,19 @@ int main(int argc, char** argv) {
             });
         }
         for (auto& t : warmup_workers) t.join();
+    }
+
+    // Wait for any background activity to settle after warmup
+    for (int retry = 0; retry < 200; ++retry) {
+        uint64_t running_flushes = 0, running_compactions = 0;
+        db->GetIntProperty("rocksdb.num-running-flushes", &running_flushes);
+        db->GetIntProperty("rocksdb.num-running-compactions", &running_compactions);
+        bool amtv_stable = true;
+        if (options.enable_amtv && cfd->mem() && cfd->mem()->GetAMTVState()) {
+            amtv_stable = cfd->mem()->GetAMTVState()->IsMergeStable();
+        }
+        if (running_flushes == 0 && running_compactions == 0 && amtv_stable) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     std::cout << "  Warm-up complete. Resetting metrics before Phase A...\n";
 
@@ -650,7 +663,20 @@ int main(int argc, char** argv) {
             if (cur_cfd && cur_cfd->mem()) {
                 rocksdb::AMTVState* state = cur_cfd->mem()->GetAMTVState();
                 if (state) {
-                    amtv_stable = state->IsMergeStable();
+                    bool is_idle = state->IsMergeStable();
+                    bool no_queued_running = (state->diagnostic_phase() == rocksdb::AMTVDiagnosticPhase::kIdle);
+                    auto snap = state->GetSnapshot();
+
+                    uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
+                    uint32_t expected_stable_runs = std::popcount(static_cast<uint64_t>(20000 / chunk_tombstones));
+                    uint32_t cur_runs = snap ? snap->sealed_run_count() : 0;
+                    int32_t signed_backlog = static_cast<int32_t>(cur_runs) - static_cast<int32_t>(expected_stable_runs);
+
+                    CHECK_INVARIANT(signed_backlog >= 0,
+                        "Fatal: signed_backlog is negative (%d)! cur_runs=%u, expected_stable_runs=%u",
+                        signed_backlog, cur_runs, expected_stable_runs);
+
+                    amtv_stable = (is_idle && no_queued_running && (signed_backlog == 0));
                 }
             }
         }
@@ -713,6 +739,19 @@ int main(int argc, char** argv) {
                 }
             }
         }
+    }
+
+    // Verify strict final stability and conservation: signed_backlog == 0
+    if (options.enable_amtv) {
+        uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
+        uint32_t expected_final_stable_runs = std::popcount(static_cast<uint64_t>(20000 / chunk_tombstones));
+        int32_t final_signed_backlog = static_cast<int32_t>(drained_sealed_runs) - static_cast<int32_t>(expected_final_stable_runs);
+        CHECK_INVARIANT(final_signed_backlog >= 0,
+            "Fatal: final signed_backlog is negative (%d)! drained_sealed_runs=%u, expected=%u",
+            final_signed_backlog, drained_sealed_runs, expected_final_stable_runs);
+        CHECK_INVARIANT(final_signed_backlog == 0,
+            "Fatal: final signed_backlog must be exactly 0, got %d (drained_sealed_runs=%u, expected=%u)",
+            final_signed_backlog, drained_sealed_runs, expected_final_stable_runs);
     }
 
     // -----------------------------------------------------------------------
@@ -1065,6 +1104,7 @@ int main(int argc, char** argv) {
     uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
     int32_t peak_signed_backlog = 0;
     uint32_t peak_backlog_excess = 0;
+    uint32_t peak_actual_sealed_runs = 0;
     uint64_t backlog_excess_max_duration_us = 0;
     uint64_t current_excess_start_ts_us = 0;
     uint32_t peak_claimed_input_runs = 0;
@@ -1072,6 +1112,9 @@ int main(int argc, char** argv) {
 
     for (size_t i = 0; i < timeline_records.size(); ++i) {
         const auto& rec = timeline_records[i];
+        if (rec.sealed_run_count > peak_actual_sealed_runs) {
+            peak_actual_sealed_runs = rec.sealed_run_count;
+        }
         if (rec.event_type == "SEAL") {
             seal_timestamps_us.push_back(rec.monotonic_timestamp_us);
             if (seal_timestamps_us.size() > 1) {
@@ -1253,6 +1296,7 @@ int main(int argc, char** argv) {
        << "  \"phase_b_end_merges_publishing_only\": " << phase_b_end_merges_publishing_only << ",\n"
        << "  \"peak_signed_backlog\": " << peak_signed_backlog << ",\n"
        << "  \"peak_backlog_excess\": " << peak_backlog_excess << ",\n"
+       << "  \"peak_actual_sealed_runs\": " << peak_actual_sealed_runs << ",\n"
        << "  \"backlog_excess_max_duration_us\": " << backlog_excess_max_duration_us << ",\n"
        << "  \"peak_claimed_input_runs\": " << peak_claimed_input_runs << ",\n"
        << "  \"peak_scheduling_backlog\": " << peak_scheduling_backlog << ",\n"

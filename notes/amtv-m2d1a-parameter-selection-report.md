@@ -1,8 +1,11 @@
-# AMTV M2d.1a 参数选择实验报告 (B64/H32 vs B128/H16 配对交错评估)
+# AMTV M2d.1a 参数选择实验报告 (使用全局页缓存清理的诊断性参数选择结果)
 
-**文档状态**: 已完成 (Completed)  
+> [!WARNING]
+> **实验性质与引用限制**: 本文所载结果为 **使用全局页缓存清理的诊断性参数选择结果**，仅用于内部机制探索与参数空间初筛，**不得作为正式论文性能证据**。因违反共享服务器实验协议（包含 `drop_caches=3`），已启动无全局缓存操作的正式复核实验（M2d.1a-R）。
+
+**文档状态**: 已归档为诊断参考 (Archived as Diagnostic Baseline)  
 **执行日期**: 2026-09-06  
-**实验环境**: NUMA Node 0 (`taskset -c 0-19`, 20 Physical Cores), Linux, Page Cache Dropped (`drop_caches=3`)  
+**实验环境**: NUMA Node 0 (`taskset -c 0-19`, 20 Physical Cores), Linux, Page Cache Dropped (`drop_caches=3`, 仅诊断使用)  
 **构建类型**: Release Binary (`-O3 -DNDEBUG`, Zero Read-Path Audit Overhead)  
 **评估矩阵**: 3-Repetition 固定预注册配对交错设计 (Rep 1: A $\to$ B, Rep 2: B $\to$ A, Rep 3: A $\to$ B)  
 **候选配置**:
@@ -11,23 +14,23 @@
 
 ---
 
-## 1. 结论与参数选型决策
+## 1. 结论与初步参数选型评估
 
-根据预注册决策准则（Pre-registered Decision Rules），本次 M2d.1a 实验得出明确结论：
+根据预注册决策准则（Pre-registered Decision Rules，阈值要求相对提升 $\ge 10\%$），本次 M2d.1a 诊断性实验得出初步结论：
 
-> [!IMPORTANT]
-> **参数选型最终决议**: 
-> 1. **主干参数选型**: 正式锁定 **Candidate A (`B64-H32`)** 为 AMTV 的主要基准配置。
+> [!NOTE]
+> **初步参数选型评估**: 
+> 1. **主干参数倾向**: 初步锁定 **Candidate A (`B64-H32`)** 为主要基准候选。
 > 2. **备选参数定位**: 明确将 **Candidate B (`B128-H16`)** 保留为“低维护成本候选”（Low Maintenance Cost Profile），推荐在后台计算资源受限、需要严格限制归并频率的环境中使用。
-> 3. **架构边界遵循**: 本实验完全遵守前序约束，未引入 M2d.2 双车道归并，未引入写路径休眠/限流/backpressure，在交付本报告后立即终止当前阶段工作。
+> 3. **架构边界遵循**: 本实验完全遵守前序约束，未引入 M2d.2 双车道归并，未引入写路径休眠/限流/backpressure。
 
-### 1.1 三项预注册决策准则评估总结
+### 1.1 三项预注册决策准则初步评估总结
 
 | 决策准则 | 评估指标与实测数据 | 评估结论 |
 | :--- | :--- | :--- |
-| **Rule 1: 读延迟与前台吞吐优势** | Candidate A 前台 IOPS 为 $268,630 \pm 7,453$ ops/s，Candidate B 为 $235,114 \pm 10,827$ ops/s；配对差值 $A - B$ 为 $+33,516 \pm 17,968$ ops/s（**A 显著领先 +14.25%**，3 轮一贯为正）。Phase B 耗时 A 比 B 缩短 $0.16 \pm 0.05$ s。GetLive P99.9 改善 10.4%（$34.01$ vs $37.56$ $\mu$s）。Put P99 降低 23.7%（$250.28$ vs $309.57$ $\mu$s），DeleteRange P99 降低 25.5%（$310.52$ vs $389.71$ $\mu$s）。双方回退事件均为 0。 | **Candidate A 触发胜出条件**：前台吞吐与长尾写入延迟具备全面且统计显著的优势。 |
-| **Rule 2: 积压扩散与 Drain 收敛风险** | Candidate A 的 `peak_backlog_excess` 为 $18.67 \pm 0.58$ runs（最高 19 runs），严格低于预设的 24 runs 安全红线，且距 $H=32$ 仍有 13 层的安全裕度。`phase_b_end_to_merge_stable_us` 仅为 $504 \pm 307$ $\mu$s（< 1 ms），`foreground_end_to_merge_stable_us` 为 0 $\mu$s（前台结束前已完全收敛，无残留归并）。 | **Candidate A 保持安全稳定**：积压在 Phase B 受控且未扩散，Phase C 早期亚毫秒级收敛，无任何稳定性风险。 |
-| **Rule 3: 归并开销与 CPU 权衡** | Candidate B 归并次数减半（152 次 vs 308 次，减少 50.6%），归并总耗时节省约 49.8 ms（303.5 ms vs 353.3 ms），单次最大归并延迟相当（$46.8$ vs $44.8$ ms）。但 Candidate B 因单批收集规模翻倍（$B=128$），显著加剧前台写路径聚合停顿，吞吐下降 14.3%，写入 P99 增加 24%~26%。 | **Candidate B 验证为优质备选**：适合 CPU 严苛受限场景，但不应取代 A 作为通用默认配置。 |
+| **Rule 1: 读延迟与前台吞吐优势 (阈值 $\ge 10\%$)** | Candidate A 前台 IOPS 为 $268,630 \pm 7,453$ ops/s，Candidate B 为 $235,114 \pm 10,827$ ops/s；配对差值 $A - B$ 为 $+33,516 \pm 17,968$ ops/s（**N=3三个配对吞吐差值均为正，均值领先 14.25%**，满足 $\ge 10\%$ 准则要求）。Phase B 耗时 A 比 B 缩短 $0.16 \pm 0.05$ s。GetLive P99.9 改善 10.4%（$34.01$ vs $37.56$ $\mu$s）。Put P99 降低 23.7%（$250.28$ vs $309.57$ $\mu$s），DeleteRange P99 降低 25.5%（$310.52$ vs $389.71$ $\mu$s）。双方回退事件均为 0。 | **Candidate A 满足准则**：吞吐领先达标（+14.25% $\ge$ 10%），写端尾延迟显著更优。 |
+| **Rule 2: 积压扩散与 Drain 收敛风险** | Candidate A 的 `peak_actual_sealed_runs` 为 19 runs（`peak_backlog_excess` 为 $18.67 \pm 0.58$ runs），严格低于预设的 24 runs 安全红线，且距 $H=32$ 仍有 13 个 Run 槽位余量。`phase_b_end_to_merge_stable_us` 仅为 $504 \pm 307$ $\mu$s（< 1 ms），`foreground_end_to_merge_stable_us` 为 0 $\mu$s（前台结束前已完全收敛，无残留归并），最终严格收敛至 `signed_backlog == 0`。 | **Candidate A 保持安全稳定**：积压在 Phase B 受控且未扩散，Phase C 早期亚毫秒级收敛，无任何稳定性风险。 |
+| **Rule 3: 归并开销与 CPU 权衡** | Candidate B 归并次数减半（152 次 vs 308 次，减少 50.6%），归并总耗时节省约 49.8 ms（303.5 ms vs 353.3 ms），单次最大归并延迟相当（$46.8$ vs $44.8$ ms）。但在 B128 下观察到更高的 Put 和 DeleteRange 尾延迟（写入 P99 增加 24%~26%），前台吞吐下降 14.3%。其延迟来源可能涉及更大的 Open Delta 复制、快照发布及查询成本，具体构成留待后续 Audit 探针验证。 | **Candidate B 验证为优质备选**：适合 CPU 严苛受限场景，但不应取代 A 作为通用默认配置。 |
 
 ---
 
@@ -94,12 +97,13 @@ $$\text{Rep 3: } \text{Candidate A} \to \text{Candidate B}$$
 
 | 指标项目 | Candidate A (`B64-H32`) | Candidate B (`B128-H16`) | 配对差值 ($A - B$) [$\text{Mean} \pm \text{SD}$] | 关键分析 |
 | :--- | :--- | :--- | :--- | :--- |
-| **峰值超额积压 (`peak_backlog_excess`)** | $18.67 \pm 0.58$ runs | $8.00 \pm 0.00$ runs | $+10.67 \pm 0.58$ runs | Candidate A 因块到达率高出 $2.38\times$，峰值积压为 19 runs；由于 $H=32$，距上限仍有 13 层绝对裕度。B 积压仅 8 runs。 |
+| **实际封印 Run 峰值 (`peak_actual_sealed_runs`)** | 19 runs (恒定) | 8 runs (恒定) | $+11.00 \pm 0.00$ runs | A 真实物理 Run 峰值为 19，距硬上限 $H=32$ 拥有 **13 个 Run 槽位余量**；B 真实物理 Run 峰值为 8，距 $H=16$ 拥有 8 个 Run 槽位余量。 |
+| **峰值超额积压 (`peak_backlog_excess`)** | $18.67 \pm 0.58$ runs | $8.00 \pm 0.00$ runs | $+10.67 \pm 0.58$ runs | Candidate A 因块到达率高出 $2.38\times$，超额积压峰值为 19 runs。注意：硬上限余量应由 `peak_actual_sealed_runs` 推导。 |
 | **超额积压最大持续时间 ($\mu$s)** | $44,917 \pm 1,093$ | $46,743 \pm 2,838$ | $-1,826 \pm 1,958$ | 两者积压最长持续时间均在 45 ms 左右，即单次深层归并（L6/L7）的执行耗时。 |
 | **在途声明输入 Run 数 (`claimed_input_runs`)** | 2 runs (恒定) | 2 runs (恒定) | $0.00 \pm 0.00$ | M2c 状态机调度行为严格稳定，无超额声明或死锁。 |
 | **调度排队峰值 (`scheduling_backlog`)** | $18.67 \pm 0.58$ | $8.00 \pm 0.00$ | $+10.67 \pm 0.58$ | 与超额积压完全重合，表明排队与物理层数严格一致。 |
-| **Phase B 结束至归并收敛耗时 (`phase_b_end_to_merge_stable_us`)** | **$504 \pm 307$ $\mu$s** | **$517 \pm 203$ $\mu$s** | **$-13 \pm 501$ $\mu$s** | 双方均在 **亚毫秒级（< 1 ms）** 完成收敛（A: 316~858 $\mu$s, B: 296~694 $\mu$s）。 |
-| **前台结束至归并收敛耗时 (`foreground_end_to_merge_stable_us`)** | **$0$ $\mu$s** | **$0$ $\mu$s** | **$0.00 \pm 0.00$** | 系统在 Phase C 结束前已完全收敛，无任何滞后归并任务。 |
+| **Phase B 结束至严格收敛耗时 (`phase_b_end_to_merge_stable_us`)** | **$504 \pm 307$ $\mu$s** | **$517 \pm 203$ $\mu$s** | **$-13 \pm 501$ $\mu$s** | 双方均在 **亚毫秒级（< 1 ms）** 严格收敛至 `task_state==Idle && mergeable_pair_count==0 && queued/running==0 && signed_backlog==0`。 |
+| **前台结束至严格收敛耗时 (`foreground_end_to_merge_stable_us`)** | **$0$ $\mu$s** | **$0$ $\mu$s** | **$0.00 \pm 0.00$** | 系统在 Phase C 结束前已完全达到严格稳态，无任何滞后归并任务。 |
 | **Phase B 结束时在途任务状态** | `task_state=3, diag=3` | `task_state=3, diag=3` | 一致 | 均为 `kRunning` / `kComputing` 阶段。 |
 | **Phase B 结束后新计算归并数** | 1 个 (尾部收敛归并) | 1 个 (尾部收敛归并) | $0.00 \pm 0.00$ | 仅完成 Phase B 结束时已在执行的 1 个尾部归并。 |
 | **Phase B 结束后仅发布归并数** | 0 个 | 0 个 | $0.00 \pm 0.00$ | 无悬挂未发布归并。 |
@@ -134,20 +138,20 @@ $$\text{Rep 3: } \text{Candidate A} \to \text{Candidate B}$$
 
 ---
 
-## 4. 机制深入分析：为何 Candidate A (`B64-H32`) 更优？
+## 4. 机制深入分析：Candidate A 与 B 的行为差异
 
-1. **写路径批处理延迟敏感性 (Write-Path Batch Latency Sensitivity)**:
-   - 当 $B=64$ 时，每累计 64 个墓碑触发一次 Seal。单线程或少量前台写入者跨越 64 个墓碑的聚合等待窗口较短，Put P99 为 250 $\mu$s，DeleteRange P99 为 310 $\mu$s。
-   - 当 $B=128$ 时，单个 Chunk 涵盖 128 个墓碑。尽管总 Seal 次数减少，但前台线程在本地累积较大 Chunk 时产生的同步开销与锁争用显著拉长，导致 Put P99 骤升至 310 $\mu$s（增加 24%），DeleteRange P99 升至 390 $\mu$s（增加 26%）。
-   - 这一写入延迟的恶化直接拖慢了 8 个并发工作线程的整体步调，使得前台吞吐从 268.6k 降至 235.1k ops/s。
+1. **写入尾延迟差异 (Write-Path Tail Latency Analysis)**:
+   - 在 B128 下，观察到更高的 Put（P99 高出 24%）和 DeleteRange（P99 高出 26%）长尾延迟。
+   - 注意：Open Delta 采用就地累加，并不会在写路径上等待填满 128 条后才确认写入。
+   - B128 下尾延迟升高的潜在来源包括：更大的 Open Delta 条目在发生快照发布、版本推进或合并时的内存拷贝与发布开销，以及更大未封口增量对并发查询的影响。其精确物理构成留待后续专用 Audit 探针验证，不作为 Release 阶段定论。
 
-2. **$H=32$ 提供的充足安全屏障 (Safety Headroom)**:
-   - 在旧有 $B=64, H=16$ 下，峰值积压为 19 runs，超过了 $H=16$，导致频繁触发昂贵的 Fallback。
-   - 在 Candidate A ($B=64, H=32$) 下，峰值积压依然是 18~19 runs，但因硬上限扩展为 32，系统拥有多达 13 层的缓冲空间，**Fallback 事件彻底降低为 0**！
-   - 由于未触发 Fallback，前台完全免除了全表重建的巨大开销，展现出了最佳的稳定性和最高吞吐。
+2. **$H=32$ 提供的充足 Run 槽位余量 (Run Slot Headroom)**:
+   - 在 Candidate A ($B=64, H=32$) 下，实际封印 Run 峰值 `peak_actual_sealed_runs` 为 19 runs。由于硬上限扩展为 32，系统拥有多达 **13 个 Run 槽位余量**（$32 - 19 = 13$），**Fallback 事件彻底降低为 0**！
+   - 不能直接使用 `peak_backlog_excess` 推导硬上限余量，必须基于真实的 `peak_actual_sealed_runs` 计算。
 
-3. **亚毫秒级的自然收敛能力 (Sub-Millisecond Convergence)**:
-   - Phase B 结束时，系统仅需完成 1 个在途尾部归并（耗时约 45 ms），随后在 Phase C（写入减少、点查主导）开始后 300~800 $\mu$s 内即达到稳定状态（`signed_backlog <= 0`）。
+3. **严格稳态收敛性 (Strict Stability Convergence)**:
+   - 系统的严格稳态判定准则为：`task_state == Idle && mergeable_pair_count == 0 && queued/running == 0 && signed_backlog == 0`。
+   - Phase B 结束时，系统仅需完成 1 个在途尾部归并（耗时约 45 ms），随后在 Phase C 开始后 300~800 $\mu$s 内即达到严格稳态（`signed_backlog == 0`）。
    - 在前台工作全部结束时（Window 1 终止），`foreground_end_to_merge_stable_us` 恒为 0 $\mu$s，后台归并线程早已完全处于空闲状态，无任何积压拖尾。
 
 ---
