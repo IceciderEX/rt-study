@@ -158,18 +158,25 @@ def sha256_file(filepath):
     return h.hexdigest()
 
 def main():
-    out_dir = "/home/wam/grad/s14-range-delete-study/traces/m2d_getonly_dynamic_500k"
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate AMTV M2d trace files")
+    parser.add_argument("--seed", type=int, default=90001, help="Base random seed (default: 90001)")
+    parser.add_argument("--out-dir", type=str, default="/home/wam/grad/s14-range-delete-study/traces/m2d_getonly_dynamic_500k", help="Output directory")
+    args = parser.parse_args()
+
+    base_seed = args.seed
+    out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
     
     print("=" * 70)
-    print("Generating AMTV M2d Deterministic Trace (m2d_getonly_dynamic_500k)...")
+    print(f"Generating AMTV M2d Deterministic Trace (seed={base_seed}, out={out_dir})...")
     print("=" * 70)
     
     all_workers_records = []
     trace_files = []
     
     for w in range(NUM_WORKERS):
-        recs = generate_worker_trace(w, BASE_SEED)
+        recs = generate_worker_trace(w, base_seed)
         all_workers_records.append(recs)
         trace_path = os.path.join(out_dir, f"worker_{w}.trace")
         write_binary_trace(trace_path, recs)
@@ -290,7 +297,7 @@ def main():
         'value_size_bytes': VALUE_SIZE,
         'num_workers': NUM_WORKERS,
         'total_operations': TOTAL_OPS,
-        'random_seed': BASE_SEED,
+        'random_seed': base_seed,
         'phases': {
             'phase_a': {'get_live': 80000, 'put': 20000, 'delete_range': 0, 'total': 100000},
             'phase_b': {'get_live': 50000, 'put': 30000, 'delete_range': 20000, 'total': 100000},

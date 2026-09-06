@@ -59,6 +59,25 @@ $$\text{tombstones\_at\_fallback} = (\text{merges\_completed} + 17) \times 64$$
 - 在 8 个前台并发线程全速写入 Phase B 时，B64 的实际 Chunk 到达中位间隔为 **2,625 $\mu s$**（约 2.63 毫秒），并非推算的 380 $\mu s$。
 - 但在 Phase B 的峰值瞬间，前台 8 个线程协同产生 DeleteRange 的总体到达率高达 **24,155 条/秒**，换算为 Chunk 到达率为 **377.4 个 Chunk/秒**！
 
+### 1.4 追溯并统一 B64/H16 最大归并时间统计（22.2 ms vs 46.5 ms）
+
+针对此前诊断报告汇总表输出 22.2 ms 而时间线事件序列输出 46.5 ms 的矛盾，从 `amtv_merge_timeline_b64_h16.csv` 完整事件链路对账核实如下：
+
+1. **精确时间戳与指标抽取（Run 553, L7 归并）**：
+   - `MERGE_START` 时间戳：`2869314275111` $\mu s$，排队等待时间 `merge_queue_wait_us = 107` $\mu s$（0.11 ms）；
+   - `MERGE_DONE` 时间戳：`2869314321627` $\mu s$；
+   - 净计算墙钟时间：$2869314321627 - 2869314275111 = \mathbf{46,516 \mu s}$（时间线记录 `merge_wall_time_us = 46,526` $\mu s$，即 **46.53 ms**）；
+   - 净有效线程 CPU 时间：`merge_cpu_time_us = 46,381` $\mu s$（即 **46.38 ms**）；
+   - **排队与计算性质确认**：排队时间仅为 0.11 ms，**46.53 ms 为 100% 纯有效计算时间**，不存在“46.5 ms 包含大量排队时间”的情况。
+2. **两口径差异根因追溯**：
+   - 在引擎原统计代码中，`max_single_merge_wall_time_nanos_` 的更新语句被置于 `if (can_publish)` 分支内部；
+   - 在时间戳 `2869314304070` $\mu s$（Run 553 计算中途），前台因 L0 堆叠至 16 个且第 17 个 Chunk 尝试封口触发了 Fallback；
+   - 当 Run 553 于 `2869314321627` $\mu s$ 计算完毕进入发布逻辑时，因 `fallback_required_ == true`，发布分支未执行，走入 `MERGE_DISCARD`；
+   - 因此，该 46.5 ms 的真实计算耗时未被更新至原变量，原驱动提取的 22.2 ms（22,196 $\mu s$）实际上是**最后一个成功发布（Published）的 Level 6 归并任务耗时**。
+3. **指标统一与规范**：
+   - 统一拆分为两个独立指标：`max_computed_merge_wall_us`（最大计算耗时）与 `max_published_merge_wall_us`（最大发布耗时）；
+   - 在 B64/H16 中，**最大计算耗明确为 46.53 ms（CPU 46.38 ms）**，最大发布耗时为 **22.20 ms**。彻底消除两数值矛盾。
+
 ---
 
 ## 二、4 组单轮诊断实测全景指标表（13 项核心指标）
@@ -74,7 +93,8 @@ $$\text{tombstones\_at\_fallback} = (\text{merges\_completed} + 17) \times 64$$
 | **5. GetLive P50 / P95 / P99 ($\mu s$)** | 8.09 / 24.13 / 9666.36 | **6.96 / 15.04 / 21.96** | **7.71 / 16.51 / 22.84** | 13.02 / 39.74 / 54.06 |
 | **6. GetLive Max ($\mu s$)** | 27,909.4 $\mu s$ | **206.37 $\mu s$** | **214.21 $\mu s$** | 382.58 $\mu s$ |
 | **7. Post-Fallback Get P99 / Max** | 14,630.6 / 27,909.4 $\mu s$ | 无 Fallback (0) | 无 Fallback (0) | 无 Fallback (0) |
-| **8. 单次归并最大 Wall Time** | 22.2 ms (L6) | **38.3 ms (L7)** | **45.4 ms (L6)** | **46.2 ms (L5)** |
+| **8. 单次计算最大 Wall / CPU Time** | **46.5 ms / 46.4 ms (L7)** | **38.3 ms / 38.3 ms (L7)** | **45.4 ms / 45.4 ms (L6)** | **46.2 ms / 46.1 ms (L5)** |
+| **8a. 单次发布最大 Wall Time** | 22.2 ms (L6, L7因Fallback丢弃) | **38.3 ms (L7)** | **45.4 ms (L6)** | **46.2 ms (L5)** |
 | **9. 归并层级峰值直方图** | {L0:12, L2:1, L4:1, L7:2} | {L2:2, L4:1, L5:1, L8:1} | {L1:2, L3:1, L4:1, L7:1} | {L1:1, L2:1, L3:1, L6:1} |
 | **10. 终态 Drained 直方图** | 溢出冻结 (16 runs) | **{L3:1, L4:1, L5:1, L8:1}** | **{L2:1, L3:1, L4:1, L7:1}** | **{L1:1, L2:1, L3:1, L6:1}** |
 | **11. 终态 Open Delta 大小** | 0 (已回退) | **32 条** | **32 条** | **32 条** |
@@ -82,7 +102,7 @@ $$\text{tombstones\_at\_fallback} = (\text{merges\_completed} + 17) \times 64$$
 | **13. Phase B 积压斜率 (Slope)** | 4.76 runs/s | 4.97 runs/s | 2.21 runs/s | 0.38 runs/s |
 | **14. Get 探查 Run 均值 (最大值)** | 5.40 (16) | 4.55 (20) | 4.06 (11) | 3.68 (7) |
 | **15. 重建放大系数 (Recon WA)** | 5.96x | 7.35x | 6.35x | 5.35x |
-| **16. 引擎输出写放大 (Output WA)** | 0x (纯内存吞吐) | 0x (纯内存吞吐) | 0x (纯内存吞吐) | 0x (纯内存吞吐) |
+| **16. 引擎输出写放大 (Output WA)** | 0x (前台及观察窗口内Flush/Compaction输出WA=0，不含WAL、AMTV内存重建与设备层写放大) | 0x (前台及观察窗口内Flush/Compaction输出WA=0，不含WAL、AMTV内存重建与设备层写放大) | 0x (前台及观察窗口内Flush/Compaction输出WA=0，不含WAL、AMTV内存重建与设备层写放大) | 0x (前台及观察窗口内Flush/Compaction输出WA=0，不含WAL、AMTV内存重建与设备层写放大) |
 | **17. 静态归敛耗时 (Drain Time)** | 59.8 $\mu s$ | 9.0 $\mu s$ | 17.7 $\mu s$ | 45.6 $\mu s$ |
 
 ---

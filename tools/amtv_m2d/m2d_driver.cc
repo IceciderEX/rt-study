@@ -275,7 +275,9 @@ int main(int argc, char** argv) {
 
     // Reset AMTV timeline logger and configure probe stats
     rocksdb::AMTVTimelineLogger::Get().Reset();
+#ifdef ROCKSDB_READ_PATH_AUDIT
     rocksdb::g_amtv_get_probe_stats_enabled.store(true, std::memory_order_relaxed);
+#endif
 
     // 1. Verify CPU affinity
     cpu_set_t cpuset;
@@ -447,8 +449,10 @@ int main(int argc, char** argv) {
     std::vector<std::vector<study::formal::ThreadLocalHistogram>> hist_del(cfg.num_workers, std::vector<study::formal::ThreadLocalHistogram>(3));
     std::vector<study::formal::ThreadLocalHistogram> hist_get_post_fallback(cfg.num_workers);
 
+#ifdef ROCKSDB_READ_PATH_AUDIT
     // Worker probe stats collector
     std::vector<rocksdb::AMTVGetProbeStats> worker_probe_stats(cfg.num_workers);
+#endif
 
     std::barrier sync_barrier(cfg.num_workers + 1);
 
@@ -464,12 +468,17 @@ int main(int argc, char** argv) {
         phase_elapsed_sec[phase_idx] = std::chrono::duration<double>(p_end - p_start).count();
     };
 
-    // Phase B End Snapshot Storage
+    // Track Phase B End Snapshot
     uint32_t phase_b_end_sealed_runs = 0;
     uint32_t phase_b_end_open_delta_len = 0;
     std::string phase_b_end_level_hist = "{}";
     bool phase_b_end_mergeable_pairs_exist = false;
     uint64_t phase_b_end_fallback_events = 0;
+    int phase_b_end_task_state = 0;
+    int phase_b_end_diagnostic_phase = 0;
+    uint64_t phase_b_end_merge_computed = 0;
+    uint64_t phase_b_end_merge_published = 0;
+    uint64_t phase_b_end_ts_us = 0;
 
     // Spawn 8 Worker Threads
     std::vector<std::thread> workers;
@@ -477,7 +486,9 @@ int main(int argc, char** argv) {
 
     for (int w = 0; w < cfg.num_workers; ++w) {
         workers.emplace_back([&, w]() {
+#ifdef ROCKSDB_READ_PATH_AUDIT
             rocksdb::tl_amtv_get_probe_stats.Reset();
+#endif
             const auto& trace = worker_traces[w];
             rocksdb::ReadOptions ropts;
             rocksdb::WriteOptions wopts;
@@ -544,7 +555,9 @@ int main(int argc, char** argv) {
             }
 
             // Copy thread-local probe stats before worker thread terminates
+#ifdef ROCKSDB_READ_PATH_AUDIT
             worker_probe_stats[w] = rocksdb::tl_amtv_get_probe_stats;
+#endif
         });
     }
 
@@ -562,6 +575,8 @@ int main(int argc, char** argv) {
 
     // Capture Phase B End Snapshot immediately upon Phase B completion
     {
+        phase_b_end_ts_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
         rocksdb::ColumnFamilyData* cur_cfd =
             static_cast<rocksdb::ColumnFamilyHandleImpl*>(db->DefaultColumnFamily())->cfd();
         if (cur_cfd && cur_cfd->mem()) {
@@ -575,12 +590,18 @@ int main(int argc, char** argv) {
                     phase_b_end_mergeable_pairs_exist = rocksdb::HasMergeablePair(snap->sealed_runs);
                 }
                 phase_b_end_fallback_events = state->fallback_event_count();
+                phase_b_end_task_state = static_cast<int>(state->task_state());
+                phase_b_end_diagnostic_phase = static_cast<int>(state->diagnostic_phase());
+                phase_b_end_merge_computed = state->merge_computed_count();
+                phase_b_end_merge_published = state->merge_published_count();
             }
         }
         std::cout << "  [Phase B End Snapshot] sealed_runs=" << phase_b_end_sealed_runs
                   << ", open_delta=" << phase_b_end_open_delta_len
                   << ", hist=" << phase_b_end_level_hist
                   << ", mergeable_pairs_exist=" << (phase_b_end_mergeable_pairs_exist ? "true" : "false")
+                  << ", task_state=" << phase_b_end_task_state
+                  << ", diag_phase=" << phase_b_end_diagnostic_phase
                   << ", fallback_events=" << phase_b_end_fallback_events << "\n";
     }
 
@@ -590,6 +611,8 @@ int main(int argc, char** argv) {
 
     for (auto& t : workers) t.join();
     auto fg_end = std::chrono::steady_clock::now();
+    uint64_t fg_end_ts_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        fg_end.time_since_epoch()).count();
     double fg_elapsed_sec = std::chrono::duration<double>(fg_end - fg_start).count();
     double fg_iops = 300000.0 / fg_elapsed_sec;
 
@@ -693,9 +716,9 @@ int main(int argc, char** argv) {
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: External State Model & Full DB Verification
+    // Step 4: External State Model & Full 500,000 Key DB Verification
     // -----------------------------------------------------------------------
-    std::cout << "  [Verification] Executing External State Model & Bit-for-Bit DB Verification...\n";
+    std::cout << "  [Verification] Executing External State Model & Full 500,000 Key Get() Reconcile...\n";
     ExternalStateModel model(cfg.total_keys);
     for (int w = 0; w < cfg.num_workers; ++w) {
         for (const auto& rec : worker_traces[w]) {
@@ -711,22 +734,32 @@ int main(int argc, char** argv) {
     auto [expected_live_count, expected_model_sha] = model.ComputeStateDigest();
     CHECK_INVARIANT(expected_live_count == 300000, "Model live count mismatch: expected 300000, got %lu", expected_live_count);
 
-    // Scan full DB
-    uint64_t db_visible_count = 0;
+    // 1. Full 500,000 Key Point Get() Reconciliation
+    uint64_t verified_live_count = 0;
+    uint64_t verified_deleted_count = 0;
+    rocksdb::ReadOptions v_ropts;
     SHA256_CTX db_ctx;
     SHA256_Init(&db_ctx);
 
-    {
-        rocksdb::ReadOptions v_ropts;
-        std::unique_ptr<rocksdb::Iterator> it(db->NewIterator(v_ropts));
-        for (it->SeekToFirst(); it->Valid(); it->Next()) {
-            db_visible_count++;
-            std::string k = it->key().ToString();
-            std::string v = it->value().ToString();
-            SHA256_Update(&db_ctx, k.data(), k.size());
-            SHA256_Update(&db_ctx, v.data(), v.size());
+    for (uint64_t k = 0; k < cfg.total_keys; ++k) {
+        std::string key_str = FormatKey(k);
+        std::string val;
+        rocksdb::Status s = db->Get(v_ropts, key_str, &val);
+        const std::string& exp_val = model.Get(k);
+        if (!exp_val.empty()) {
+            CHECK_INVARIANT(s.ok(), "Key %lu expected LIVE but Get returned %s", k, s.ToString().c_str());
+            CHECK_INVARIANT(val == exp_val, "Key %lu value mismatch! DB: %s, Model: %s", k, val.c_str(), exp_val.c_str());
+            verified_live_count++;
+            SHA256_Update(&db_ctx, key_str.data(), key_str.size());
+            SHA256_Update(&db_ctx, val.data(), val.size());
+        } else {
+            CHECK_INVARIANT(s.IsNotFound(), "Key %lu expected DELETED but Get returned %s", k, s.ToString().c_str());
+            verified_deleted_count++;
         }
     }
+
+    CHECK_INVARIANT(verified_live_count == 300000, "Live count mismatch: expected 300000, got %lu", verified_live_count);
+    CHECK_INVARIANT(verified_deleted_count == 200000, "Deleted count mismatch: expected 200000, got %lu", verified_deleted_count);
 
     unsigned char db_hash[SHA256_DIGEST_LENGTH];
     SHA256_Final(db_hash, &db_ctx);
@@ -736,10 +769,18 @@ int main(int argc, char** argv) {
     }
     std::string db_sha256 = oss.str();
 
-    CHECK_INVARIANT(db_visible_count == 300000, "DB visible keys count mismatch: expected 300000, got %lu", db_visible_count);
     CHECK_INVARIANT(db_sha256 == expected_model_sha, "DB SHA-256 mismatch! DB: %s, Model: %s", db_sha256.c_str(), expected_model_sha.c_str());
+    std::cout << "  [PASS] All 500,000 keys verified (300,000 live, 200,000 deleted) bit-for-bit against State Model (SHA-256: " << db_sha256 << ")\n";
 
-    std::cout << "  [PASS] 300,000 visible keys verified bit-for-bit against State Model (SHA-256: " << db_sha256 << ")\n";
+    // 2. Scan Iterator Visibility Verification
+    uint64_t db_visible_count = 0;
+    {
+        std::unique_ptr<rocksdb::Iterator> it(db->NewIterator(v_ropts));
+        for (it->SeekToFirst(); it->Valid(); it->Next()) {
+            db_visible_count++;
+        }
+    }
+    CHECK_INVARIANT(db_visible_count == 300000, "DB visible iterator count mismatch: expected 300000, got %lu", db_visible_count);
 
     // -----------------------------------------------------------------------
     // Step 5: Gather Metrics & Enforce Fail-Fast Gates
@@ -758,6 +799,8 @@ int main(int argc, char** argv) {
     // Gather AMTV metrics
     uint64_t amtv_merge_completed = 0;
     uint64_t amtv_merge_requested = 0;
+    uint64_t amtv_merge_computed = 0;
+    uint64_t amtv_merge_published = 0;
     uint64_t amtv_merge_discarded = 0;
     uint64_t amtv_merge_unscheduled = 0;
     uint64_t amtv_merge_input_runs = 0;
@@ -779,6 +822,22 @@ int main(int argc, char** argv) {
     uint64_t max_single_merge_cpu_time_us = 0;
     uint32_t max_single_merge_level = 0;
 
+    uint64_t max_computed_merge_wall_us = 0;
+    uint64_t max_computed_merge_cpu_us = 0;
+    uint32_t max_computed_merge_level = 0;
+    uint64_t max_published_merge_wall_us = 0;
+    uint64_t max_published_merge_cpu_us = 0;
+    uint32_t max_published_merge_level = 0;
+    uint64_t total_computed_merge_wall_us = 0;
+    uint64_t total_computed_merge_cpu_us = 0;
+    uint64_t total_published_merge_wall_us = 0;
+    uint64_t total_published_merge_cpu_us = 0;
+
+    uint64_t raw_entry_payload_bytes_peak = 0;
+    uint64_t raw_entry_capacity_proxy_bytes_peak = 0;
+    uint64_t fragment_payload_proxy_bytes_peak = 0;
+    uint64_t inflight_payload_proxy_bytes_peak = 0;
+
     std::map<uint32_t, uint64_t> merge_count_per_lvl;
     std::map<uint32_t, uint64_t> merge_tombstones_per_lvl;
     std::map<uint32_t, uint64_t> merge_wall_us_per_lvl;
@@ -793,6 +852,8 @@ int main(int argc, char** argv) {
             if (state) {
                 amtv_merge_completed = state->merge_completed() - init_merge_completed;
                 amtv_merge_requested = state->merge_requested() - init_merge_requested;
+                amtv_merge_computed = state->merge_computed_count();
+                amtv_merge_published = state->merge_published_count();
                 amtv_merge_discarded = state->merge_discarded();
                 amtv_merge_unscheduled = state->merge_unscheduled();
                 amtv_merge_input_runs = state->merge_input_run_count();
@@ -810,6 +871,24 @@ int main(int argc, char** argv) {
                 max_single_merge_wall_time_us = state->max_single_merge_wall_time_nanos() / 1000;
                 max_single_merge_cpu_time_us = state->max_single_merge_cpu_time_nanos() / 1000;
                 max_single_merge_level = state->max_single_merge_level();
+
+                max_computed_merge_wall_us = state->max_computed_merge_wall_time_nanos() / 1000;
+                max_computed_merge_cpu_us = state->max_computed_merge_cpu_time_nanos() / 1000;
+                max_computed_merge_level = state->max_computed_merge_level();
+
+                max_published_merge_wall_us = state->max_published_merge_wall_time_nanos() / 1000;
+                max_published_merge_cpu_us = state->max_published_merge_cpu_time_nanos() / 1000;
+                max_published_merge_level = state->max_published_merge_level();
+
+                total_computed_merge_wall_us = state->total_computed_merge_wall_time_nanos() / 1000;
+                total_computed_merge_cpu_us = state->total_computed_merge_cpu_time_nanos() / 1000;
+                total_published_merge_wall_us = state->total_published_merge_wall_time_nanos() / 1000;
+                total_published_merge_cpu_us = state->total_published_merge_cpu_time_nanos() / 1000;
+
+                raw_entry_payload_bytes_peak = state->raw_entry_payload_bytes_peak();
+                raw_entry_capacity_proxy_bytes_peak = state->raw_entry_capacity_proxy_bytes_peak();
+                fragment_payload_proxy_bytes_peak = state->fragment_payload_proxy_bytes_peak();
+                inflight_payload_proxy_bytes_peak = state->inflight_payload_proxy_bytes_peak();
 
                 merge_count_per_lvl = state->merge_count_per_level();
                 merge_tombstones_per_lvl = state->merge_input_tombstones_per_level();
@@ -833,21 +912,18 @@ int main(int argc, char** argv) {
             std::cout << "  [AMTV Diagnostics] hard_layer_limit: " << state->hard_layer_limit()
                       << ", sealed_runs: " << amtv_sealed_runs
                       << ", fallback_events: " << amtv_fallback_events
-                      << ", runs_at_fallback: " << amtv_runs_at_fallback
-                      << ", tombstones_at_fallback: " << amtv_tombstones_at_fallback
-                      << ", merge_completed: " << amtv_merge_completed
-                      << ", merge_requested: " << amtv_merge_requested
-                      << ", wall_us: " << amtv_merge_wall_time_us
-                      << ", cpu_us: " << amtv_merge_cpu_time_us
-                      << ", max_single_merge_wall_us: " << max_single_merge_wall_time_us
-                      << " (L" << max_single_merge_level << ")\n";
+                      << ", computed: " << amtv_merge_computed
+                      << ", published: " << amtv_merge_published
+                      << ", discarded: " << amtv_merge_discarded
+                      << ", max_computed_wall_us: " << max_computed_merge_wall_us << " (L" << max_computed_merge_level << ")"
+                      << ", max_published_wall_us: " << max_published_merge_wall_us << " (L" << max_published_merge_level << ")\n";
         }
     }
 
-    // Gate 2: In formal non-diagnostic release mode, fallback must be 0
-    if (cfg.mode != "diagnostic" && cfg.config_name == "AMTV-M2c-T0") {
-        CHECK_INVARIANT(amtv_fallback_events == 0, "AMTV-M2c-T0 had %lu fallback events!", amtv_fallback_events);
-        CHECK_INVARIANT(amtv_fallback_gets == 0, "AMTV-M2c-T0 had %lu fallback gets!", amtv_fallback_gets);
+    // Gate 2: In formal non-diagnostic mode, fallback must be 0
+    if (cfg.mode != "diagnostic") {
+        CHECK_INVARIANT(amtv_fallback_events == 0, "Config %s had %lu fallback events!", cfg.config_name.c_str(), amtv_fallback_events);
+        CHECK_INVARIANT(amtv_fallback_gets == 0, "Config %s had %lu fallback gets!", cfg.config_name.c_str(), amtv_fallback_gets);
     }
 
     // Gather Audit metrics if in audit mode
@@ -913,20 +989,25 @@ int main(int argc, char** argv) {
     agg_get_post_fallback.ComputeQuantiles(post_fallback_p50, post_fallback_p90, post_fallback_p95, post_fallback_p99, post_fallback_p999, post_fallback_mean, post_fallback_max);
     uint64_t post_fallback_count = agg_get_post_fallback.GetCount();
 
+    double get_probe_avg_sealed_runs = 0.0;
+    double get_probe_avg_open_delta = 0.0;
+    uint32_t get_probe_max_sealed_runs = 0;
+    uint32_t get_probe_max_open_delta = 0;
+    uint32_t get_probe_p50_sealed_runs = 0;
+    uint32_t get_probe_p90_sealed_runs = 0;
+    uint32_t get_probe_p99_sealed_runs = 0;
+
+#ifdef ROCKSDB_READ_PATH_AUDIT
     // Aggregate Probe Stats across workers
     rocksdb::AMTVGetProbeStats agg_probe_stats;
     for (int w = 0; w < cfg.num_workers; ++w) {
         agg_probe_stats.MergeFrom(worker_probe_stats[w]);
     }
-    double get_probe_avg_sealed_runs = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.sealed_runs_sum) / agg_probe_stats.get_count : 0.0;
-    double get_probe_avg_open_delta = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.open_delta_entries_sum) / agg_probe_stats.get_count : 0.0;
-    uint32_t get_probe_max_sealed_runs = agg_probe_stats.sealed_runs_max;
-    uint32_t get_probe_max_open_delta = agg_probe_stats.open_delta_entries_max;
+    get_probe_avg_sealed_runs = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.sealed_runs_sum) / agg_probe_stats.get_count : 0.0;
+    get_probe_avg_open_delta = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.open_delta_entries_sum) / agg_probe_stats.get_count : 0.0;
+    get_probe_max_sealed_runs = agg_probe_stats.sealed_runs_max;
+    get_probe_max_open_delta = agg_probe_stats.open_delta_entries_max;
 
-    // Quantiles of sealed runs probed
-    uint32_t get_probe_p50_sealed_runs = 0;
-    uint32_t get_probe_p90_sealed_runs = 0;
-    uint32_t get_probe_p99_sealed_runs = 0;
     if (agg_probe_stats.get_count > 0) {
         uint64_t running = 0;
         uint64_t target_p50 = static_cast<uint64_t>(agg_probe_stats.get_count * 0.50);
@@ -949,6 +1030,7 @@ int main(int argc, char** argv) {
             }
         }
     }
+#endif
 
     // Compute Engine Output Write Amplification
     uint64_t put_value_bytes = 60000ULL * 256ULL;
@@ -973,13 +1055,23 @@ int main(int argc, char** argv) {
 
     auto timeline_records = rocksdb::AMTVTimelineLogger::Get().GetRecords();
 
-    // 1. Calculate actual SEAL Delta t distribution from monotonic timestamps
+    // 1. Calculate actual SEAL Delta t distribution and Backlog Metrics
     std::vector<uint64_t> seal_timestamps_us;
     std::vector<uint64_t> seal_delta_t_us;
     std::vector<std::pair<double, double>> phase_b_backlog_points; // (time_sec, sealed_runs)
     uint64_t phase_b_first_ts_us = 0;
+    uint64_t last_merge_publish_timestamp_us = 0;
 
-    for (const auto& rec : timeline_records) {
+    uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
+    int32_t peak_signed_backlog = 0;
+    uint32_t peak_backlog_excess = 0;
+    uint64_t backlog_excess_max_duration_us = 0;
+    uint64_t current_excess_start_ts_us = 0;
+    uint32_t peak_claimed_input_runs = 0;
+    uint32_t peak_scheduling_backlog = 0;
+
+    for (size_t i = 0; i < timeline_records.size(); ++i) {
+        const auto& rec = timeline_records[i];
         if (rec.event_type == "SEAL") {
             seal_timestamps_us.push_back(rec.monotonic_timestamp_us);
             if (seal_timestamps_us.size() > 1) {
@@ -987,6 +1079,42 @@ int main(int argc, char** argv) {
                 seal_delta_t_us.push_back(dt);
             }
         }
+        if (rec.event_type == "MERGE_PUBLISH") {
+            last_merge_publish_timestamp_us = rec.monotonic_timestamp_us;
+        }
+
+        uint64_t del_count = rec.delete_ranges_issued;
+        uint32_t stable_run_count = std::popcount(static_cast<uint64_t>(del_count / chunk_tombstones));
+        int32_t signed_backlog = static_cast<int32_t>(rec.sealed_run_count) - static_cast<int32_t>(stable_run_count);
+        uint32_t backlog_excess = static_cast<uint32_t>(std::max(0, signed_backlog));
+        if (signed_backlog > peak_signed_backlog) peak_signed_backlog = signed_backlog;
+        if (backlog_excess > peak_backlog_excess) peak_backlog_excess = backlog_excess;
+
+        uint32_t cur_claimed = (rec.event_type == "MERGE_START" || rec.event_type == "MERGE_DONE") ? 2 : 0;
+        if (cur_claimed > peak_claimed_input_runs) peak_claimed_input_runs = cur_claimed;
+
+        int32_t cur_sched = static_cast<int32_t>(rec.sealed_run_count) - static_cast<int32_t>(cur_claimed) - static_cast<int32_t>(stable_run_count);
+        uint32_t sched_backlog = static_cast<uint32_t>(std::max(0, cur_sched));
+        if (sched_backlog > peak_scheduling_backlog) peak_scheduling_backlog = sched_backlog;
+
+        if (backlog_excess > 0) {
+            if (current_excess_start_ts_us == 0) {
+                current_excess_start_ts_us = rec.monotonic_timestamp_us;
+            }
+            uint64_t cur_dur = rec.monotonic_timestamp_us - current_excess_start_ts_us;
+            if (cur_dur > backlog_excess_max_duration_us) {
+                backlog_excess_max_duration_us = cur_dur;
+            }
+        } else {
+            if (current_excess_start_ts_us != 0) {
+                uint64_t cur_dur = rec.monotonic_timestamp_us - current_excess_start_ts_us;
+                if (cur_dur > backlog_excess_max_duration_us) {
+                    backlog_excess_max_duration_us = cur_dur;
+                }
+                current_excess_start_ts_us = 0;
+            }
+        }
+
         if (rec.phase == "PHASE_B") {
             if (phase_b_first_ts_us == 0) {
                 phase_b_first_ts_us = rec.monotonic_timestamp_us;
@@ -995,6 +1123,21 @@ int main(int argc, char** argv) {
             phase_b_backlog_points.push_back({rel_sec, static_cast<double>(rec.sealed_run_count)});
         }
     }
+
+    // Drain metric calculations
+    uint64_t phase_b_end_to_merge_stable_us = 0;
+    if (last_merge_publish_timestamp_us > phase_b_end_ts_us) {
+        phase_b_end_to_merge_stable_us = last_merge_publish_timestamp_us - phase_b_end_ts_us;
+    }
+    uint64_t foreground_end_to_merge_stable_us = 0;
+    if (last_merge_publish_timestamp_us > fg_end_ts_us) {
+        foreground_end_to_merge_stable_us = last_merge_publish_timestamp_us - fg_end_ts_us;
+    }
+    uint64_t phase_b_end_merges_computed_after = (amtv_merge_computed >= phase_b_end_merge_computed)
+        ? (amtv_merge_computed - phase_b_end_merge_computed) : 0;
+    uint64_t phase_b_end_merges_published_after = (amtv_merge_published >= phase_b_end_merge_published)
+        ? (amtv_merge_published - phase_b_end_merge_published) : 0;
+    uint32_t phase_b_end_merges_publishing_only = (phase_b_end_diagnostic_phase == 4 /* kPublishing */) ? 1 : 0;
 
     double chunk_interval_min_us = 0;
     double chunk_interval_p50_us = 0;
@@ -1016,7 +1159,6 @@ int main(int argc, char** argv) {
 
     // 2. Phase B DeleteRange arrival rate
     double phase_b_del_range_arrival_rate = (phase_elapsed_sec[1] > 0.0) ? (20000.0 / phase_elapsed_sec[1]) : 0.0;
-    uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
     double phase_b_chunk_arrival_rate = phase_b_del_range_arrival_rate / chunk_tombstones;
 
     // 3. Phase B Backlog Regression Slope (runs / sec)
@@ -1081,14 +1223,19 @@ int main(int argc, char** argv) {
        << "  \"get_post_fallback_count\": " << post_fallback_count << ",\n"
        << "  \"put_p95_us\": " << put_p95 << ",\n"
        << "  \"put_p99_us\": " << put_p99 << ",\n"
+       << "  \"put_p999_us\": " << put_p999 << ",\n"
+       << "  \"put_max_us\": " << put_max << ",\n"
        << "  \"delete_range_p95_us\": " << del_p95 << ",\n"
        << "  \"delete_range_p99_us\": " << del_p99 << ",\n"
+       << "  \"delete_range_p999_us\": " << del_p999 << ",\n"
+       << "  \"delete_range_max_us\": " << del_max << ",\n"
        << "  \"fg_capacity_flushes\": " << fg_capacity_flushes << ",\n"
        << "  \"fg_threshold_flushes\": " << fg_threshold_flushes << ",\n"
        << "  \"fg_flush_bytes\": " << fg_flush_bytes << ",\n"
        << "  \"fg_compaction_read_bytes\": " << fg_compaction_read_bytes << ",\n"
        << "  \"fg_compaction_write_bytes\": " << fg_compaction_write_bytes << ",\n"
        << "  \"engine_output_wa\": " << engine_output_wa << ",\n"
+       << "  \"engine_output_wa_description\": \"前台及观察窗口内 Flush/Compaction 引擎输出写放大为 0 (不含 WAL、AMTV 内存重建和设备层写放大)\",\n"
        << "  \"l0_files_peak\": " << l0_files_peak << ",\n"
        << "  \"pending_compaction_bytes\": " << pending_compaction_bytes << ",\n"
        << "  \"user_cpu_sec\": " << user_cpu_sec << ",\n"
@@ -1096,6 +1243,19 @@ int main(int argc, char** argv) {
        << "  \"peak_rss_kb\": " << peak_rss_kb << ",\n"
        << "  \"drain_converged\": " << (drain_converged ? "true" : "false") << ",\n"
        << "  \"drain_elapsed_sec\": " << drain_elapsed_sec << ",\n"
+       << "  \"phase_b_end_to_merge_stable_us\": " << phase_b_end_to_merge_stable_us << ",\n"
+       << "  \"foreground_end_to_merge_stable_us\": " << foreground_end_to_merge_stable_us << ",\n"
+       << "  \"last_merge_publish_timestamp_us\": " << last_merge_publish_timestamp_us << ",\n"
+       << "  \"phase_b_end_task_state\": " << phase_b_end_task_state << ",\n"
+       << "  \"phase_b_end_diagnostic_phase\": " << phase_b_end_diagnostic_phase << ",\n"
+       << "  \"phase_b_end_merges_computed_after\": " << phase_b_end_merges_computed_after << ",\n"
+       << "  \"phase_b_end_merges_published_after\": " << phase_b_end_merges_published_after << ",\n"
+       << "  \"phase_b_end_merges_publishing_only\": " << phase_b_end_merges_publishing_only << ",\n"
+       << "  \"peak_signed_backlog\": " << peak_signed_backlog << ",\n"
+       << "  \"peak_backlog_excess\": " << peak_backlog_excess << ",\n"
+       << "  \"backlog_excess_max_duration_us\": " << backlog_excess_max_duration_us << ",\n"
+       << "  \"peak_claimed_input_runs\": " << peak_claimed_input_runs << ",\n"
+       << "  \"peak_scheduling_backlog\": " << peak_scheduling_backlog << ",\n"
        << "  \"db_sha256\": \"" << db_sha256 << "\",\n"
        << "  \"expected_model_sha\": \"" << expected_model_sha << "\",\n"
        << "  \"chunk_interval_min_us\": " << chunk_interval_min_us << ",\n"
@@ -1115,6 +1275,20 @@ int main(int argc, char** argv) {
        << "  \"max_single_merge_wall_time_us\": " << max_single_merge_wall_time_us << ",\n"
        << "  \"max_single_merge_cpu_time_us\": " << max_single_merge_cpu_time_us << ",\n"
        << "  \"max_single_merge_level\": " << max_single_merge_level << ",\n"
+       << "  \"max_computed_merge_wall_us\": " << max_computed_merge_wall_us << ",\n"
+       << "  \"max_computed_merge_cpu_us\": " << max_computed_merge_cpu_us << ",\n"
+       << "  \"max_computed_merge_level\": " << max_computed_merge_level << ",\n"
+       << "  \"max_published_merge_wall_us\": " << max_published_merge_wall_us << ",\n"
+       << "  \"max_published_merge_cpu_us\": " << max_published_merge_cpu_us << ",\n"
+       << "  \"max_published_merge_level\": " << max_published_merge_level << ",\n"
+       << "  \"total_computed_merge_wall_us\": " << total_computed_merge_wall_us << ",\n"
+       << "  \"total_computed_merge_cpu_us\": " << total_computed_merge_cpu_us << ",\n"
+       << "  \"total_published_merge_wall_us\": " << total_published_merge_wall_us << ",\n"
+       << "  \"total_published_merge_cpu_us\": " << total_published_merge_cpu_us << ",\n"
+       << "  \"raw_entry_payload_bytes_peak\": " << raw_entry_payload_bytes_peak << ",\n"
+       << "  \"raw_entry_capacity_proxy_bytes_peak\": " << raw_entry_capacity_proxy_bytes_peak << ",\n"
+       << "  \"fragment_payload_proxy_bytes_peak\": " << fragment_payload_proxy_bytes_peak << ",\n"
+       << "  \"inflight_payload_proxy_bytes_peak\": " << inflight_payload_proxy_bytes_peak << ",\n"
        << "  \"merge_count_per_level\": " << map_to_json(merge_count_per_lvl) << ",\n"
        << "  \"merge_input_tombstones_per_level\": " << map_to_json(merge_tombstones_per_lvl) << ",\n"
        << "  \"merge_wall_time_us_per_level\": " << map_to_json(merge_wall_us_per_lvl) << ",\n"
@@ -1130,6 +1304,9 @@ int main(int argc, char** argv) {
        << "  \"get_probe_max_open_delta\": " << get_probe_max_open_delta << ",\n"
        << "  \"amtv_merge_completed\": " << amtv_merge_completed << ",\n"
        << "  \"amtv_merge_requested\": " << amtv_merge_requested << ",\n"
+       << "  \"amtv_merge_computed\": " << amtv_merge_computed << ",\n"
+       << "  \"amtv_merge_published\": " << amtv_merge_published << ",\n"
+       << "  \"amtv_merge_discarded\": " << amtv_merge_discarded << ",\n"
        << "  \"amtv_merge_input_runs\": " << amtv_merge_input_runs << ",\n"
        << "  \"amtv_merge_input_tombstones\": " << amtv_merge_input_tombstones << ",\n"
        << "  \"amtv_reconstruction_amplification\": " << (options.enable_amtv ? (double)amtv_merge_input_tombstones / 20000.0 : 0.0) << ",\n"
