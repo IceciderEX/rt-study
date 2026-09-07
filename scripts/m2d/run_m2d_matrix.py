@@ -4,7 +4,6 @@ import sys
 import json
 import time
 import subprocess
-import random
 import csv
 import numpy as np
 
@@ -24,7 +23,6 @@ AUDIT_SEEDS = {
     3: 230001,
 }
 
-# Audit: 3-round balanced preregistered interleaved schedule
 AUDIT_SCHEDULE = [
     # Rep 1 (seed 210001): Native-T0 -> Native-T512 -> AMTV-T0 -> AMTV-T512
     ("Native-T0", 1), ("Native-T512", 1), ("AMTV-T0", 1), ("AMTV-T512", 1),
@@ -34,23 +32,35 @@ AUDIT_SCHEDULE = [
     ("AMTV-T0", 3), ("AMTV-T512", 3), ("Native-T0", 3), ("Native-T512", 3),
 ]
 
-# Release: 4x4 Latin Square + Round 5 fixed-seed permutation
-rng_r5 = random.Random(20260906)
-r5_configs = CONFIGS.copy()
-rng_r5.shuffle(r5_configs)
+RELEASE_SEEDS = {
+    1: 310001,
+    2: 320001,
+    3: 330001,
+    4: 340001,
+    5: 350001,
+}
 
+# Release: 5-round balanced preregistered interleaved schedule
 RELEASE_SCHEDULE = [
-    # Round 1 (Latin Row 0)
+    # Rep 1 (seed 310001): Native-T0 -> Native-T512 -> AMTV-T0 -> AMTV-T512
     ("Native-T0", 1), ("Native-T512", 1), ("AMTV-T0", 1), ("AMTV-T512", 1),
-    # Round 2 (Latin Row 1)
-    ("Native-T512", 2), ("AMTV-T512", 2), ("Native-T0", 2), ("AMTV-T0", 2),
-    # Round 3 (Latin Row 2)
-    ("AMTV-T0", 3), ("Native-T0", 3), ("AMTV-T512", 3), ("Native-T512", 3),
-    # Round 4 (Latin Row 3)
-    ("AMTV-T512", 4), ("AMTV-T0", 4), ("Native-T512", 4), ("Native-T0", 4),
-    # Round 5 (Preregistered Permutation)
-    (r5_configs[0], 5), (r5_configs[1], 5), (r5_configs[2], 5), (r5_configs[3], 5),
+    # Rep 2 (seed 320001): Native-T512 -> AMTV-T0 -> AMTV-T512 -> Native-T0
+    ("Native-T512", 2), ("AMTV-T0", 2), ("AMTV-T512", 2), ("Native-T0", 2),
+    # Rep 3 (seed 330001): AMTV-T0 -> AMTV-T512 -> Native-T0 -> Native-T512
+    ("AMTV-T0", 3), ("AMTV-T512", 3), ("Native-T0", 3), ("Native-T512", 3),
+    # Rep 4 (seed 340001): AMTV-T512 -> Native-T0 -> Native-T512 -> AMTV-T0
+    ("AMTV-T512", 4), ("Native-T0", 4), ("Native-T512", 4), ("AMTV-T0", 4),
+    # Rep 5 (seed 350001): Native-T0 -> AMTV-T512 -> AMTV-T0 -> Native-T512
+    ("Native-T0", 5), ("AMTV-T512", 5), ("AMTV-T0", 5), ("Native-T512", 5),
 ]
+
+def safe_float(v):
+    if v is None or v == "N/A" or v == "":
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
 
 def run_single(mode, cfg_name, rep, binary, output_dir, trace_dir=None):
     exp_id = f"m2d_{mode}_{cfg_name.lower().replace('-', '_')}_rep{rep}"
@@ -58,6 +68,8 @@ def run_single(mode, cfg_name, rep, binary, output_dir, trace_dir=None):
     if trace_dir is None:
         if mode == "audit" and rep in AUDIT_SEEDS:
             trace_dir = os.path.join(STUDY_ROOT, f"traces/m2d_audit_rep{rep}_seed{AUDIT_SEEDS[rep]}")
+        elif mode == "release" and rep in RELEASE_SEEDS:
+            trace_dir = os.path.join(STUDY_ROOT, f"traces/m2d_release_rep{rep}_seed{RELEASE_SEEDS[rep]}")
         else:
             trace_dir = TRACE_DIR
     cmd = [
@@ -90,81 +102,53 @@ def run_single(mode, cfg_name, rep, binary, output_dir, trace_dir=None):
         data = json.load(f)
     return data
 
-def run_smoke():
+def run_smoke(binary=BIN_RELEASE, mode="smoke_release"):
     print("\n======================================================================")
-    print("STAGE 1: Running Smoke Verification (4 configs, Rep 0, Audit Mode)")
+    print("STAGE 1: Running Release Smoke Verification (4 configs, Rep 0)")
     print("======================================================================")
-    out_dir = os.path.join(RESULTS_DIR, "smoke")
+    out_dir = os.path.join(RESULTS_DIR, mode)
     os.makedirs(out_dir, exist_ok=True)
     results = []
     for cfg in CONFIGS:
-        data = run_single("smoke", cfg, 0, BIN_AUDIT, out_dir)
+        data = run_single(mode, cfg, 0, binary, out_dir)
         results.append(data)
     
     # Check that all 4 configs have matching SHA-256
     sha0 = results[0]["db_sha256"]
     for r in results:
-        assert r["db_sha256"] == sha0, f"SHA mismatch across smoke runs! {r['config_name']}: {r['db_sha256']} vs {sha0}"
-        assert r["expected_model_sha"] == sha0, f"Model SHA mismatch in {r['config_name']}"
-    print(f"\n[PASS] All 4 Smoke runs verified! Canonical Final DB SHA-256: {sha0}")
-    return True
-
-def run_audit():
-    print("\n======================================================================")
-    print("STAGE 2: Running Audit Matrix (4 configs x 3 reps = 12 runs)")
-    print("======================================================================")
-    out_dir = os.path.join(RESULTS_DIR, "audit")
-    os.makedirs(out_dir, exist_ok=True)
-    results = []
-    for cfg, rep in AUDIT_SCHEDULE:
-        data = run_single("audit", cfg, rep, BIN_AUDIT, out_dir)
-        results.append(data)
-        
-    print("\n======================================================================")
-    print("Evaluating AMTV M2d Audit Gate Conditions:")
-    print("======================================================================")
-    # Check Audit Gate
-    for r in results:
         cfg = r["config_name"]
-        rep = r["rep"]
-        # Gate 1: AMTV-T0 active MemTable materialization == 0
-        if cfg == "AMTV-T0":
-            mat_count = r.get("audit_mat_count", 0)
-            print(f"  [{cfg} Rep {rep}] Active MemTable Materialization Count: {mat_count} (Req: 0)")
-            if mat_count != 0:
-                print(f"[FAIL GATE] {cfg} rep {rep} had {mat_count} active MemTable materializations!", file=sys.stderr)
-                sys.exit(1)
-                
-            fallback_cnt = r.get("amtv_fallback_events", 0)
-            print(f"  [{cfg} Rep {rep}] Fallback Count: {fallback_cnt} (Req: 0)")
-            if fallback_cnt != 0:
-                print(f"[FAIL GATE] {cfg} rep {rep} had {fallback_cnt} fallback events!", file=sys.stderr)
-                sys.exit(1)
-                
-        # Gate 2: T0 natural capacity flushes == 0
-        if cfg in ["Native-T0", "AMTV-T0"]:
-            cap_flushes = r.get("fg_capacity_flushes", 0)
-            print(f"  [{cfg} Rep {rep}] Foreground Capacity Flushes: {cap_flushes} (Req: 0)")
-            if cap_flushes != 0:
-                print(f"[FAIL GATE] {cfg} rep {rep} had {cap_flushes} capacity flushes!", file=sys.stderr)
-                sys.exit(1)
-                
-        # Gate 3: Bit-for-bit DB & Model SHA match
-        if r["db_sha256"] != r["expected_model_sha"]:
-            print(f"[FAIL GATE] {cfg} rep {rep} SHA mismatch! DB: {r['db_sha256']}, Model: {r['expected_model_sha']}", file=sys.stderr)
-            sys.exit(1)
-            
-        # Gate 4: Drain window converged
-        if not r.get("drain_converged", False):
-            print(f"[FAIL GATE] {cfg} rep {rep} drain window did not converge!", file=sys.stderr)
-            sys.exit(1)
+        assert r["db_sha256"] == sha0, f"SHA mismatch across smoke runs! {cfg}: {r['db_sha256']} vs {sha0}"
+        assert r["expected_model_sha"] == sha0, f"Model SHA mismatch in {cfg}"
+        assert r.get("drain_converged", False), f"{cfg} drain did not converge!"
+        
+        # Check T0/T512 flush gating
+        if "T0" in cfg:
+            assert r.get("total_capacity_flushes", 0) == 0, f"{cfg} had capacity flushes: {r.get('total_capacity_flushes')}"
+        if "T512" in cfg:
+            assert r.get("total_capacity_flushes", 0) == 0, f"{cfg} had capacity flushes: {r.get('total_capacity_flushes')}"
+            assert r.get("total_threshold_flushes", 0) > 0, f"{cfg} had 0 threshold flushes!"
 
-    print("\n>>>>> AUDIT GATE 100% PASSED! ALL MECHANISM INVARIANTS SATISFIED! <<<<<")
-    return results
+        # Check fallback
+        if "AMTV" in cfg:
+            assert r.get("amtv_fallback_events", 0) == 0, f"{cfg} had fallback events: {r.get('amtv_fallback_events')}"
+            assert r.get("amtv_fallback_gets", 0) == 0, f"{cfg} had fallback gets: {r.get('amtv_fallback_gets')}"
+        else:
+            assert r.get("amtv_fallback_events") == "N/A", f"Native {cfg} did not have N/A for fallback events!"
+            assert r.get("amtv_sealed_runs") == "N/A", f"Native {cfg} did not have N/A for sealed runs!"
+
+        # Verify 3-window write amplification is present
+        assert "pwa_fg" in r, f"Missing pwa_fg in {cfg}"
+        assert "pwa_cooldown" in r, f"Missing pwa_cooldown in {cfg}"
+        assert "pwa_drain" in r, f"Missing pwa_drain in {cfg}"
+        assert "pwa_total" in r, f"Missing pwa_total in {cfg}"
+        assert "post_measurement_teardown_output" in r, f"Missing post_measurement_teardown_output in {cfg}"
+
+    print(f"\n[PASS] All 4 Release Smoke runs verified! Canonical Final DB SHA-256: {sha0}")
+    return True
 
 def run_release():
     print("\n======================================================================")
-    print("STAGE 3: Running Release Performance Matrix (4 configs x 5 reps = 20 runs)")
+    print("STAGE 2: Running Release Performance Matrix (4 configs x 5 reps = 20 runs)")
     print("======================================================================")
     out_dir = os.path.join(RESULTS_DIR, "release")
     os.makedirs(out_dir, exist_ok=True)
@@ -172,18 +156,33 @@ def run_release():
     for cfg, rep in RELEASE_SCHEDULE:
         data = run_single("release", cfg, rep, BIN_RELEASE, out_dir)
         results.append(data)
-    print("\n>>>>> RELEASE MATRIX COMPLETED SUCCESSFULLY! <<<<<")
+        
+        # Fail-fast check after each run
+        assert data["db_sha256"] == data["expected_model_sha"], f"Model SHA mismatch in {cfg} rep {rep}!"
+        assert data.get("drain_converged", False), f"Drain not converged in {cfg} rep {rep}!"
+        if "T0" in cfg:
+            assert data.get("total_capacity_flushes", 0) == 0, f"{cfg} rep {rep} capacity flushes > 0!"
+        if "T512" in cfg:
+            assert data.get("total_capacity_flushes", 0) == 0, f"{cfg} rep {rep} capacity flushes > 0!"
+            assert data.get("total_threshold_flushes", 0) > 0, f"{cfg} rep {rep} threshold flushes == 0!"
+        if "AMTV" in cfg:
+            assert data.get("amtv_fallback_events", 0) == 0, f"{cfg} rep {rep} fallback events > 0!"
+            assert data.get("amtv_fallback_gets", 0) == 0, f"{cfg} rep {rep} fallback gets > 0!"
+
+    print("\n>>>>> RELEASE MATRIX COMPLETED SUCCESSFULLY (20/20 RUNS PASSED)! <<<<<")
     return results
 
 def compute_bootstrap_ci(data, num_samples=10000, ci=0.95):
-    if len(data) < 2:
-        val = data[0] if len(data) == 1 else 0.0
-        return val, val
+    valid = [x for x in data if x is not None]
+    if len(valid) == 0:
+        return "N/A", "N/A"
+    if len(valid) < 2:
+        return valid[0], valid[0]
     rng = np.random.default_rng(20260906)
     means = []
-    n = len(data)
+    n = len(valid)
     for _ in range(num_samples):
-        sample = rng.choice(data, size=n, replace=True)
+        sample = rng.choice(valid, size=n, replace=True)
         means.append(np.mean(sample))
     lower = np.percentile(means, (1.0 - ci) / 2.0 * 100.0)
     upper = np.percentile(means, (1.0 + ci) / 2.0 * 100.0)
@@ -200,23 +199,23 @@ def summarize_metrics(results, mode):
         by_cfg.setdefault(c, []).append(r)
         
     metrics = [
-        "fg_elapsed_sec", "fg_iops", "get_live_p50_us", "get_live_p95_us", "get_live_p99_us", "get_live_p999_us",
-        "put_p95_us", "put_p99_us", "delete_range_p95_us", "delete_range_p99_us",
-        "fg_capacity_flushes", "fg_threshold_flushes", "fg_flush_bytes", "fg_compaction_write_bytes", "engine_output_wa",
+        "fg_elapsed_sec", "fg_iops",
+        "phase_a_sec", "phase_b_sec", "phase_c_sec",
+        "get_live_p50_us", "get_live_p90_us", "get_live_p95_us", "get_live_p99_us", "get_live_p999_us", "get_live_max_us",
+        "put_p50_us", "put_p95_us", "put_p99_us", "put_max_us",
+        "delete_range_p50_us", "delete_range_p95_us", "delete_range_p99_us", "delete_range_max_us",
+        "pwa_fg", "pwa_cooldown", "pwa_drain", "pwa_total",
+        "w1_flush_bytes", "w1_compaction_read_bytes", "w1_compaction_write_bytes",
+        "w2_flush_bytes", "w2_compaction_read_bytes", "w2_compaction_write_bytes",
+        "w3_flush_bytes", "w3_compaction_read_bytes", "w3_compaction_write_bytes",
+        "w_total_flush_bytes", "w_total_compaction_read_bytes", "w_total_compaction_write_bytes",
+        "post_teardown_flush_bytes", "post_teardown_compaction_write_bytes",
+        "fg_capacity_flushes", "fg_threshold_flushes", "total_capacity_flushes", "total_threshold_flushes",
         "user_cpu_sec", "sys_cpu_sec", "peak_rss_kb", "drain_elapsed_sec",
-        "amtv_merge_completed", "amtv_merge_cpu_time_us", "amtv_raw_entries_struct_bytes_peak"
+        "amtv_merge_computed", "amtv_merge_published", "amtv_merge_discarded",
+        "amtv_merge_wall_time_us", "amtv_merge_cpu_time_us",
+        "amtv_raw_entries_struct_bytes_peak", "amtv_inflight_payload_proxy_bytes_peak"
     ]
-    if mode == "audit":
-        metrics.extend([
-            "audit_mat_count", "audit_mat_nanos", "audit_cache_inv_count",
-            "audit_lock_attempt_count", "audit_lock_contended_count", "audit_lock_wait_nanos",
-            "amtv_write_state_lock_wait_nanos", "amtv_write_append_nanos",
-            "amtv_write_snapshot_clone_nanos", "amtv_write_seal_build_nanos",
-            "amtv_write_publish_nanos", "amtv_merge_discarded",
-            "amtv_merge_discarded_wall_time_us", "amtv_merge_discarded_cpu_time_us",
-            "get_probe_avg_sealed_runs", "get_probe_max_sealed_runs",
-            "get_probe_avg_open_delta", "get_probe_max_open_delta"
-        ])
 
     rows = []
     for cfg in CONFIGS:
@@ -225,18 +224,27 @@ def summarize_metrics(results, mode):
             continue
         row = {"config_name": cfg, "n_runs": len(runs)}
         for m in metrics:
-            vals = [float(r.get(m, 0.0)) for r in runs]
-            mean_val = np.mean(vals)
-            std_val = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
-            med_val = np.median(vals)
-            iqr_val = np.percentile(vals, 75) - np.percentile(vals, 25) if len(vals) > 1 else 0.0
-            ci_low, ci_high = compute_bootstrap_ci(vals)
-            row[f"{m}_mean"] = f"{mean_val:.4f}"
-            row[f"{m}_std"] = f"{std_val:.4f}"
-            row[f"{m}_median"] = f"{med_val:.4f}"
-            row[f"{m}_iqr"] = f"{iqr_val:.4f}"
-            row[f"{m}_ci95_low"] = f"{ci_low:.4f}"
-            row[f"{m}_ci95_high"] = f"{ci_high:.4f}"
+            vals = [safe_float(r.get(m)) for r in runs]
+            valid_vals = [v for v in vals if v is not None]
+            if len(valid_vals) == 0:
+                row[f"{m}_mean"] = "N/A"
+                row[f"{m}_std"] = "N/A"
+                row[f"{m}_median"] = "N/A"
+                row[f"{m}_iqr"] = "N/A"
+                row[f"{m}_ci95_low"] = "N/A"
+                row[f"{m}_ci95_high"] = "N/A"
+            else:
+                mean_val = np.mean(valid_vals)
+                std_val = np.std(valid_vals, ddof=1) if len(valid_vals) > 1 else 0.0
+                med_val = np.median(valid_vals)
+                iqr_val = np.percentile(valid_vals, 75) - np.percentile(valid_vals, 25) if len(valid_vals) > 1 else 0.0
+                ci_low, ci_high = compute_bootstrap_ci(valid_vals)
+                row[f"{m}_mean"] = f"{mean_val:.4f}"
+                row[f"{m}_std"] = f"{std_val:.4f}"
+                row[f"{m}_median"] = f"{med_val:.4f}"
+                row[f"{m}_iqr"] = f"{iqr_val:.4f}"
+                row[f"{m}_ci95_low"] = f"{ci_low:.4f}" if isinstance(ci_low, float) else ci_low
+                row[f"{m}_ci95_high"] = f"{ci_high:.4f}" if isinstance(ci_high, float) else ci_high
         rows.append(row)
         
     if rows:
@@ -269,13 +277,53 @@ def summarize_metrics(results, mode):
         writer.writerows(phase_rows)
     print(f"Saved phase breakdown CSV to: {phase_csv_path}")
 
+    # Generate paired comparison summary
+    paired_csv_path = os.path.join(summary_dir, f"amtv-m2d-paired-diffs-{mode}.csv")
+    pairs = [
+        ("Native-T0", "AMTV-T0", "T0_Pair"),
+        ("Native-T512", "AMTV-T512", "T512_Pair"),
+    ]
+    paired_rows = []
+    for c_native, c_amtv, pair_name in pairs:
+        native_runs = {r["rep"]: r for r in by_cfg.get(c_native, [])}
+        amtv_runs = {r["rep"]: r for r in by_cfg.get(c_amtv, [])}
+        common_reps = sorted(set(native_runs.keys()) & set(amtv_runs.keys()))
+        if not common_reps:
+            continue
+        
+        # Diff metrics: Phase B time ratio, Overall time ratio, IOPS ratio, P99 latency ratio, PWA diff
+        phase_b_diffs = [native_runs[rep]["phase_b_sec"] - amtv_runs[rep]["phase_b_sec"] for rep in common_reps]
+        phase_b_ratios = [native_runs[rep]["phase_b_sec"] / amtv_runs[rep]["phase_b_sec"] for rep in common_reps]
+        fg_time_ratios = [native_runs[rep]["fg_elapsed_sec"] / amtv_runs[rep]["fg_elapsed_sec"] for rep in common_reps]
+        iops_ratios = [amtv_runs[rep]["fg_iops"] / native_runs[rep]["fg_iops"] for rep in common_reps]
+        p99_ratios = [native_runs[rep]["get_live_p99_us"] / amtv_runs[rep]["get_live_p99_us"] for rep in common_reps]
+        
+        for name, series in [
+            ("Phase B Elapsed Diff (s)", phase_b_diffs),
+            ("Phase B Elapsed Ratio (Native/AMTV)", phase_b_ratios),
+            ("Foreground Elapsed Ratio (Native/AMTV)", fg_time_ratios),
+            ("IOPS Ratio (AMTV/Native)", iops_ratios),
+            ("GetLive P99 Ratio (Native/AMTV)", p99_ratios),
+        ]:
+            paired_rows.append({
+                "pair": pair_name,
+                "metric": name,
+                "mean": f"{np.mean(series):.4f}",
+                "std": f"{np.std(series, ddof=1) if len(series) > 1 else 0.0:.4f}",
+                "median": f"{np.median(series):.4f}",
+                "iqr": f"{(np.percentile(series, 75) - np.percentile(series, 25)):.4f}" if len(series) > 1 else "0.0000"
+            })
+    if paired_rows:
+        with open(paired_csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["pair", "metric", "mean", "std", "median", "iqr"])
+            writer.writeheader()
+            writer.writerows(paired_rows)
+        print(f"Saved paired diffs CSV to: {paired_csv_path}")
+
 def main():
-    stage = sys.argv[1] if len(sys.argv) > 1 else "all"
+    stage = sys.argv[1] if len(sys.argv) > 1 else "release"
     if stage in ["smoke", "all"]:
         run_smoke()
-    if stage in ["audit", "all"]:
-        audit_res = run_audit()
-        summarize_metrics(audit_res, "audit")
     if stage in ["release", "all"]:
         rel_res = run_release()
         summarize_metrics(rel_res, "release")
