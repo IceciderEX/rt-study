@@ -16,13 +16,22 @@ BIN_RELEASE = os.path.join(STUDY_ROOT, "bin/m2d_driver_release")
 RUN_DB_BASE = os.path.join(STUDY_ROOT, "run-db/m2d")
 RESULTS_DIR = os.path.join(STUDY_ROOT, "results/amtv_m2d")
 
-CONFIGS = ["Native-T0", "Native-T512", "AMTV-M2c-T0", "AMTV-M2c-T512"]
+CONFIGS = ["Native-T0", "Native-T512", "AMTV-T0", "AMTV-T512"]
 
-# Audit: 3-round balanced interleaved schedule
+AUDIT_SEEDS = {
+    1: 210001,
+    2: 220001,
+    3: 230001,
+}
+
+# Audit: 3-round balanced preregistered interleaved schedule
 AUDIT_SCHEDULE = [
-    ("Native-T0", 1), ("Native-T512", 1), ("AMTV-M2c-T0", 1), ("AMTV-M2c-T512", 1),
-    ("Native-T512", 2), ("AMTV-M2c-T0", 2), ("AMTV-M2c-T512", 2), ("Native-T0", 2),
-    ("AMTV-M2c-T0", 3), ("AMTV-M2c-T512", 3), ("Native-T0", 3), ("Native-T512", 3),
+    # Rep 1 (seed 210001): Native-T0 -> Native-T512 -> AMTV-T0 -> AMTV-T512
+    ("Native-T0", 1), ("Native-T512", 1), ("AMTV-T0", 1), ("AMTV-T512", 1),
+    # Rep 2 (seed 220001): Native-T512 -> AMTV-T0 -> AMTV-T512 -> Native-T0
+    ("Native-T512", 2), ("AMTV-T0", 2), ("AMTV-T512", 2), ("Native-T0", 2),
+    # Rep 3 (seed 230001): AMTV-T0 -> AMTV-T512 -> Native-T0 -> Native-T512
+    ("AMTV-T0", 3), ("AMTV-T512", 3), ("Native-T0", 3), ("Native-T512", 3),
 ]
 
 # Release: 4x4 Latin Square + Round 5 fixed-seed permutation
@@ -32,20 +41,25 @@ rng_r5.shuffle(r5_configs)
 
 RELEASE_SCHEDULE = [
     # Round 1 (Latin Row 0)
-    ("Native-T0", 1), ("Native-T512", 1), ("AMTV-M2c-T0", 1), ("AMTV-M2c-T512", 1),
+    ("Native-T0", 1), ("Native-T512", 1), ("AMTV-T0", 1), ("AMTV-T512", 1),
     # Round 2 (Latin Row 1)
-    ("Native-T512", 2), ("AMTV-M2c-T512", 2), ("Native-T0", 2), ("AMTV-M2c-T0", 2),
+    ("Native-T512", 2), ("AMTV-T512", 2), ("Native-T0", 2), ("AMTV-T0", 2),
     # Round 3 (Latin Row 2)
-    ("AMTV-M2c-T0", 3), ("Native-T0", 3), ("AMTV-M2c-T512", 3), ("Native-T512", 3),
+    ("AMTV-T0", 3), ("Native-T0", 3), ("AMTV-T512", 3), ("Native-T512", 3),
     # Round 4 (Latin Row 3)
-    ("AMTV-M2c-T512", 4), ("AMTV-M2c-T0", 4), ("Native-T512", 4), ("Native-T0", 4),
+    ("AMTV-T512", 4), ("AMTV-T0", 4), ("Native-T512", 4), ("Native-T0", 4),
     # Round 5 (Preregistered Permutation)
     (r5_configs[0], 5), (r5_configs[1], 5), (r5_configs[2], 5), (r5_configs[3], 5),
 ]
 
-def run_single(mode, cfg_name, rep, binary, output_dir):
+def run_single(mode, cfg_name, rep, binary, output_dir, trace_dir=None):
     exp_id = f"m2d_{mode}_{cfg_name.lower().replace('-', '_')}_rep{rep}"
     db_path = os.path.join(RUN_DB_BASE, exp_id, "db")
+    if trace_dir is None:
+        if mode == "audit" and rep in AUDIT_SEEDS:
+            trace_dir = os.path.join(STUDY_ROOT, f"traces/m2d_audit_rep{rep}_seed{AUDIT_SEEDS[rep]}")
+        else:
+            trace_dir = TRACE_DIR
     cmd = [
         "taskset", "-c", "0-19",
         binary,
@@ -53,7 +67,7 @@ def run_single(mode, cfg_name, rep, binary, output_dir):
         "--config", cfg_name,
         "--db-path", db_path,
         "--seed-db", SEED_DB,
-        "--trace-dir", TRACE_DIR,
+        "--trace-dir", trace_dir,
         "--output-dir", output_dir,
         "--mode", mode,
         "--rep", str(rep)
@@ -113,8 +127,8 @@ def run_audit():
     for r in results:
         cfg = r["config_name"]
         rep = r["rep"]
-        # Gate 1: AMTV-M2c-T0 active MemTable materialization == 0
-        if cfg == "AMTV-M2c-T0":
+        # Gate 1: AMTV-T0 active MemTable materialization == 0
+        if cfg == "AMTV-T0":
             mat_count = r.get("audit_mat_count", 0)
             print(f"  [{cfg} Rep {rep}] Active MemTable Materialization Count: {mat_count} (Req: 0)")
             if mat_count != 0:
@@ -128,7 +142,7 @@ def run_audit():
                 sys.exit(1)
                 
         # Gate 2: T0 natural capacity flushes == 0
-        if cfg in ["Native-T0", "AMTV-M2c-T0"]:
+        if cfg in ["Native-T0", "AMTV-T0"]:
             cap_flushes = r.get("fg_capacity_flushes", 0)
             print(f"  [{cfg} Rep {rep}] Foreground Capacity Flushes: {cap_flushes} (Req: 0)")
             if cap_flushes != 0:
@@ -195,7 +209,13 @@ def summarize_metrics(results, mode):
     if mode == "audit":
         metrics.extend([
             "audit_mat_count", "audit_mat_nanos", "audit_cache_inv_count",
-            "audit_lock_attempt_count", "audit_lock_contended_count", "audit_lock_wait_nanos"
+            "audit_lock_attempt_count", "audit_lock_contended_count", "audit_lock_wait_nanos",
+            "amtv_write_state_lock_wait_nanos", "amtv_write_append_nanos",
+            "amtv_write_snapshot_clone_nanos", "amtv_write_seal_build_nanos",
+            "amtv_write_publish_nanos", "amtv_merge_discarded",
+            "amtv_merge_discarded_wall_time_us", "amtv_merge_discarded_cpu_time_us",
+            "get_probe_avg_sealed_runs", "get_probe_max_sealed_runs",
+            "get_probe_avg_open_delta", "get_probe_max_open_delta"
         ])
 
     rows = []

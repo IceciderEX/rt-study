@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         options.amtv_delta_tombstones = 64;
         options.amtv_merge_soft_limit = 2;
         options.amtv_hard_layer_limit = 16;
-    } else if (cfg.config_name == "B64-H32") {
+    } else if (cfg.config_name == "B64-H32" || cfg.config_name == "AMTV-T0") {
         options.enable_amtv = true;
         options.memtable_max_range_deletions = 0;
         options.amtv_delta_tombstones = 64;
@@ -372,12 +372,12 @@ int main(int argc, char** argv) {
         options.amtv_delta_tombstones = 256;
         options.amtv_merge_soft_limit = 2;
         options.amtv_hard_layer_limit = 16;
-    } else if (cfg.config_name == "AMTV-M2c-T512") {
+    } else if (cfg.config_name == "AMTV-M2c-T512" || cfg.config_name == "AMTV-T512") {
         options.enable_amtv = true;
         options.memtable_max_range_deletions = 512;
         options.amtv_delta_tombstones = 64;
         options.amtv_merge_soft_limit = 2;
-        options.amtv_hard_layer_limit = 16;
+        options.amtv_hard_layer_limit = 32;
     } else {
         CHECK_INVARIANT(false, "Unknown config name: %s", cfg.config_name.c_str());
     }
@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
     // 6. Reset Statistics and Establish Baseline
     options.statistics->Reset();
 #ifdef ROCKSDB_READ_PATH_AUDIT
-    if (cfg.mode == "audit") {
+    if (cfg.mode == "audit" || cfg.mode == "smoke") {
         rocksdb::SetReadPathAuditEnabled(true);
         rocksdb::GetReadPathAuditStats()->Reset();
     }
@@ -463,8 +463,16 @@ int main(int argc, char** argv) {
     std::vector<study::formal::ThreadLocalHistogram> hist_get_post_fallback(cfg.num_workers);
 
 #ifdef ROCKSDB_READ_PATH_AUDIT
-    // Worker probe stats collector
-    std::vector<rocksdb::AMTVGetProbeStats> worker_probe_stats(cfg.num_workers);
+    // Worker phase audit snapshot collector
+    struct WorkerPhaseAuditSnapshot {
+        rocksdb::ReadPathAuditStats audit_stats;
+        rocksdb::AMTVGetProbeStats probe_stats;
+        uint64_t get_count = 0;
+        uint64_t put_count = 0;
+        uint64_t del_count = 0;
+    };
+    std::vector<std::vector<WorkerPhaseAuditSnapshot>> worker_phase_stats(
+        cfg.num_workers, std::vector<WorkerPhaseAuditSnapshot>(3));
 #endif
 
     std::barrier sync_barrier(cfg.num_workers + 1);
@@ -500,7 +508,10 @@ int main(int argc, char** argv) {
     for (int w = 0; w < cfg.num_workers; ++w) {
         workers.emplace_back([&, w]() {
 #ifdef ROCKSDB_READ_PATH_AUDIT
-            rocksdb::tl_amtv_get_probe_stats.Reset();
+            if (cfg.mode == "audit" || cfg.mode == "smoke") {
+                rocksdb::GetReadPathAuditStats()->Reset();
+                rocksdb::tl_amtv_get_probe_stats.Reset();
+            }
 #endif
             const auto& trace = worker_traces[w];
             rocksdb::ReadOptions ropts;
@@ -513,6 +524,7 @@ int main(int argc, char** argv) {
                 sync_barrier.arrive_and_wait(); // Wait for phase release
 
                 size_t phase_records = 12500;
+                uint64_t phase_gets = 0, phase_puts = 0, phase_dels = 0;
                 for (size_t i = 0; i < phase_records; ++i) {
                     const auto& rec = trace[trace_idx++];
                     CHECK_INVARIANT(rec.phase_id == phase, "Trace phase mismatch: expected %d, got %u", phase, rec.phase_id);
@@ -520,6 +532,7 @@ int main(int argc, char** argv) {
                     auto op_start = std::chrono::steady_clock::now();
 
                     if (rec.op_type == 0) { // GetLive
+                        phase_gets++;
                         std::string val;
                         std::string key = FormatKey(rec.key1);
                         rocksdb::Status s_get = db->Get(ropts, key, &val);
@@ -540,6 +553,7 @@ int main(int argc, char** argv) {
 
                         rocksdb::AMTVTimelineLogger::Get().RecordForegroundOp(1);
                     } else if (rec.op_type == 2) { // Put
+                        phase_puts++;
                         std::string key = FormatKey(rec.key1);
                         std::string val = GeneratePutValue(rec.key1, rec.phase_id, rec.op_id, 256);
                         rocksdb::Status s_put = db->Put(wopts, key, val);
@@ -549,6 +563,7 @@ int main(int argc, char** argv) {
                         hist_put[w][phase].Record(lat_ns);
                         rocksdb::AMTVTimelineLogger::Get().RecordForegroundOp(1);
                     } else if (rec.op_type == 3) { // DeleteRange
+                        phase_dels++;
                         std::string k1 = FormatKey(rec.key1);
                         std::string k2 = FormatKey(rec.key2);
                         rocksdb::Status s_del = db->DeleteRange(wopts, k1, k2);
@@ -564,13 +579,23 @@ int main(int argc, char** argv) {
                     completed_ops_total.fetch_add(1, std::memory_order_relaxed);
                 }
 
+#ifdef ROCKSDB_READ_PATH_AUDIT
+                if (cfg.mode == "audit" || cfg.mode == "smoke") {
+                    auto* astats = rocksdb::GetReadPathAuditStats();
+                    worker_phase_stats[w][phase].audit_stats = *astats;
+                    astats->Reset();
+
+                    worker_phase_stats[w][phase].probe_stats = rocksdb::tl_amtv_get_probe_stats;
+                    rocksdb::tl_amtv_get_probe_stats.Reset();
+
+                    worker_phase_stats[w][phase].get_count = phase_gets;
+                    worker_phase_stats[w][phase].put_count = phase_puts;
+                    worker_phase_stats[w][phase].del_count = phase_dels;
+                }
+#endif
+
                 sync_barrier.arrive_and_wait(); // Signal phase complete
             }
-
-            // Copy thread-local probe stats before worker thread terminates
-#ifdef ROCKSDB_READ_PATH_AUDIT
-            worker_probe_stats[w] = rocksdb::tl_amtv_get_probe_stats;
-#endif
         });
     }
 
@@ -667,16 +692,23 @@ int main(int argc, char** argv) {
                     bool no_queued_running = (state->diagnostic_phase() == rocksdb::AMTVDiagnosticPhase::kIdle);
                     auto snap = state->GetSnapshot();
 
-                    uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
-                    uint32_t expected_stable_runs = std::popcount(static_cast<uint64_t>(20000 / chunk_tombstones));
-                    uint32_t cur_runs = snap ? snap->sealed_run_count() : 0;
-                    int32_t signed_backlog = static_cast<int32_t>(cur_runs) - static_cast<int32_t>(expected_stable_runs);
+                    if (options.memtable_max_range_deletions == 0) {
+                        uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
+                        uint32_t expected_stable_runs = std::popcount(static_cast<uint64_t>(20000 / chunk_tombstones));
+                        uint32_t cur_runs = snap ? snap->sealed_run_count() : 0;
+                        int32_t signed_backlog = static_cast<int32_t>(cur_runs) - static_cast<int32_t>(expected_stable_runs);
 
-                    CHECK_INVARIANT(signed_backlog >= 0,
-                        "Fatal: signed_backlog is negative (%d)! cur_runs=%u, expected_stable_runs=%u",
-                        signed_backlog, cur_runs, expected_stable_runs);
+                        CHECK_INVARIANT(signed_backlog >= 0,
+                            "Fatal: signed_backlog is negative (%d)! cur_runs=%u, expected_stable_runs=%u",
+                            signed_backlog, cur_runs, expected_stable_runs);
 
-                    amtv_stable = (is_idle && no_queued_running && (signed_backlog == 0));
+                        amtv_stable = (is_idle && no_queued_running && (signed_backlog == 0));
+                    } else {
+                        // For AMTV-T512 (memtable_max_range_deletions > 0), memtables flush at threshold,
+                        // so sealed_run count reflects only the current active memtable generation.
+                        // Stability is reached when background merge is idle and no merge is queued/running.
+                        amtv_stable = (is_idle && no_queued_running);
+                    }
                 }
             }
         }
@@ -742,7 +774,8 @@ int main(int argc, char** argv) {
     }
 
     // Verify strict final stability and conservation: signed_backlog == 0
-    if (options.enable_amtv) {
+    // Note: only applicable to AMTV-T0 where all 20,000 tombstones reside in the single active memtable.
+    if (options.enable_amtv && options.memtable_max_range_deletions == 0) {
         uint32_t chunk_tombstones = (options.amtv_delta_tombstones > 0) ? options.amtv_delta_tombstones : 64;
         uint32_t expected_final_stable_runs = std::popcount(static_cast<uint64_t>(20000 / chunk_tombstones));
         int32_t final_signed_backlog = static_cast<int32_t>(drained_sealed_runs) - static_cast<int32_t>(expected_final_stable_runs);
@@ -965,30 +998,6 @@ int main(int argc, char** argv) {
         CHECK_INVARIANT(amtv_fallback_gets == 0, "Config %s had %lu fallback gets!", cfg.config_name.c_str(), amtv_fallback_gets);
     }
 
-    // Gather Audit metrics if in audit mode
-    uint64_t audit_mat_count = 0;
-    uint64_t audit_mat_nanos = 0;
-    uint64_t audit_cache_inv_count = 0;
-    uint64_t audit_lock_attempt_count = 0;
-    uint64_t audit_lock_contended_count = 0;
-    uint64_t audit_lock_wait_nanos = 0;
-
-#ifdef ROCKSDB_READ_PATH_AUDIT
-    if (cfg.mode == "audit") {
-        auto* astats = rocksdb::GetReadPathAuditStats();
-        audit_mat_count = astats->range_tombstone_view_materialization_count;
-        audit_mat_nanos = astats->range_tombstone_view_materialization_nanos;
-        audit_cache_inv_count = astats->memtable_cache_invalidation_count;
-        audit_lock_attempt_count = astats->fragment_build_lock_attempt_count;
-        audit_lock_contended_count = astats->fragment_build_lock_contended_count;
-        audit_lock_wait_nanos = astats->fragment_build_lock_contended_wait_nanos;
-
-        if (cfg.config_name == "AMTV-M2c-T0") {
-            CHECK_INVARIANT(audit_mat_count == 0, "AMTV-M2c-T0 had %lu active MemTable materializations!", audit_mat_count);
-        }
-    }
-#endif
-
     // Rusage metrics
     struct rusage usage;
     getrusage(RUSAGE_SELF, &usage);
@@ -1028,6 +1037,14 @@ int main(int argc, char** argv) {
     agg_get_post_fallback.ComputeQuantiles(post_fallback_p50, post_fallback_p90, post_fallback_p95, post_fallback_p99, post_fallback_p999, post_fallback_mean, post_fallback_max);
     uint64_t post_fallback_count = agg_get_post_fallback.GetCount();
 
+    // Gather Audit metrics if in audit mode
+    uint64_t audit_mat_count = 0;
+    uint64_t audit_mat_nanos = 0;
+    uint64_t audit_cache_inv_count = 0;
+    uint64_t audit_lock_attempt_count = 0;
+    uint64_t audit_lock_contended_count = 0;
+    uint64_t audit_lock_wait_nanos = 0;
+
     double get_probe_avg_sealed_runs = 0.0;
     double get_probe_avg_open_delta = 0.0;
     uint32_t get_probe_max_sealed_runs = 0;
@@ -1036,40 +1053,156 @@ int main(int argc, char** argv) {
     uint32_t get_probe_p90_sealed_runs = 0;
     uint32_t get_probe_p99_sealed_runs = 0;
 
-#ifdef ROCKSDB_READ_PATH_AUDIT
-    // Aggregate Probe Stats across workers
-    rocksdb::AMTVGetProbeStats agg_probe_stats;
-    for (int w = 0; w < cfg.num_workers; ++w) {
-        agg_probe_stats.MergeFrom(worker_probe_stats[w]);
-    }
-    get_probe_avg_sealed_runs = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.sealed_runs_sum) / agg_probe_stats.get_count : 0.0;
-    get_probe_avg_open_delta = agg_probe_stats.get_count > 0 ? static_cast<double>(agg_probe_stats.open_delta_entries_sum) / agg_probe_stats.get_count : 0.0;
-    get_probe_max_sealed_runs = agg_probe_stats.sealed_runs_max;
-    get_probe_max_open_delta = agg_probe_stats.open_delta_entries_max;
+    struct PhaseAggStats {
+        uint64_t mat_count = 0;
+        uint64_t mat_nanos = 0;
+        uint64_t cache_inv_count = 0;
+        uint64_t lock_attempt_count = 0;
+        uint64_t lock_contended_count = 0;
+        uint64_t lock_wait_nanos = 0;
+        uint64_t gets = 0;
+        uint64_t puts = 0;
+        uint64_t dels = 0;
+        uint64_t probe_gets = 0;
+        double avg_sealed_runs = 0.0;
+        uint32_t max_sealed_runs = 0;
+        double avg_open_delta = 0.0;
+        uint32_t max_open_delta = 0;
+    };
+    std::vector<PhaseAggStats> phase_audit_aggs(3);
+    PhaseAggStats overall_audit_agg;
 
-    if (agg_probe_stats.get_count > 0) {
-        uint64_t running = 0;
-        uint64_t target_p50 = static_cast<uint64_t>(agg_probe_stats.get_count * 0.50);
-        uint64_t target_p90 = static_cast<uint64_t>(agg_probe_stats.get_count * 0.90);
-        uint64_t target_p99 = static_cast<uint64_t>(agg_probe_stats.get_count * 0.99);
-        bool found_p50 = false, found_p90 = false, found_p99 = false;
-        for (uint32_t i = 0; i < 64; ++i) {
-            running += agg_probe_stats.sealed_runs_hist[i];
-            if (!found_p50 && running >= target_p50) {
-                get_probe_p50_sealed_runs = i;
-                found_p50 = true;
+#ifdef ROCKSDB_READ_PATH_AUDIT
+    if (cfg.mode == "audit" || cfg.mode == "smoke") {
+        std::string wps_csv_path = cfg.output_dir + "/" + cfg.exp_id + "_worker_phase_stats.csv";
+        std::ofstream wps_out(wps_csv_path);
+        if (wps_out.is_open()) {
+            wps_out << "worker_id,phase_id,phase_name,get_count,put_count,del_count,"
+                    << "mat_count,mat_nanos,lock_attempt_count,lock_contended_count,lock_wait_nanos,cache_inv_count,"
+                    << "probe_gets,probed_runs_sum,probed_runs_max,open_delta_sum,open_delta_max\n";
+        }
+        static const char* kPhaseNames[] = {"PHASE_A", "PHASE_B", "PHASE_C"};
+
+        rocksdb::AMTVGetProbeStats overall_probe_stats;
+        for (int p = 0; p < 3; ++p) {
+            rocksdb::AMTVGetProbeStats phase_probe;
+            for (int w = 0; w < cfg.num_workers; ++w) {
+                const auto& snap = worker_phase_stats[w][p];
+                if (wps_out.is_open()) {
+                    wps_out << w << "," << p << "," << kPhaseNames[p] << ","
+                            << snap.get_count << "," << snap.put_count << "," << snap.del_count << ","
+                            << snap.audit_stats.range_tombstone_view_materialization_count << ","
+                            << snap.audit_stats.range_tombstone_view_materialization_nanos << ","
+                            << snap.audit_stats.fragment_build_lock_attempt_count << ","
+                            << snap.audit_stats.fragment_build_lock_contended_count << ","
+                            << snap.audit_stats.fragment_build_lock_contended_wait_nanos << ","
+                            << snap.audit_stats.memtable_cache_invalidation_count << ","
+                            << snap.probe_stats.get_count << ","
+                            << snap.probe_stats.sealed_runs_sum << ","
+                            << snap.probe_stats.sealed_runs_max << ","
+                            << snap.probe_stats.open_delta_entries_sum << ","
+                            << snap.probe_stats.open_delta_entries_max << "\n";
+                }
+                phase_audit_aggs[p].mat_count += snap.audit_stats.range_tombstone_view_materialization_count;
+                phase_audit_aggs[p].mat_nanos += snap.audit_stats.range_tombstone_view_materialization_nanos;
+                phase_audit_aggs[p].cache_inv_count += snap.audit_stats.memtable_cache_invalidation_count;
+                phase_audit_aggs[p].lock_attempt_count += snap.audit_stats.fragment_build_lock_attempt_count;
+                phase_audit_aggs[p].lock_contended_count += snap.audit_stats.fragment_build_lock_contended_count;
+                phase_audit_aggs[p].lock_wait_nanos += snap.audit_stats.fragment_build_lock_contended_wait_nanos;
+                phase_audit_aggs[p].gets += snap.get_count;
+                phase_audit_aggs[p].puts += snap.put_count;
+                phase_audit_aggs[p].dels += snap.del_count;
+                phase_probe.MergeFrom(snap.probe_stats);
             }
-            if (!found_p90 && running >= target_p90) {
-                get_probe_p90_sealed_runs = i;
-                found_p90 = true;
+            phase_audit_aggs[p].probe_gets = phase_probe.get_count;
+            phase_audit_aggs[p].avg_sealed_runs = phase_probe.get_count > 0 ? static_cast<double>(phase_probe.sealed_runs_sum) / phase_probe.get_count : 0.0;
+            phase_audit_aggs[p].max_sealed_runs = phase_probe.sealed_runs_max;
+            phase_audit_aggs[p].avg_open_delta = phase_probe.get_count > 0 ? static_cast<double>(phase_probe.open_delta_entries_sum) / phase_probe.get_count : 0.0;
+            phase_audit_aggs[p].max_open_delta = phase_probe.open_delta_entries_max;
+
+            overall_audit_agg.mat_count += phase_audit_aggs[p].mat_count;
+            overall_audit_agg.mat_nanos += phase_audit_aggs[p].mat_nanos;
+            overall_audit_agg.cache_inv_count += phase_audit_aggs[p].cache_inv_count;
+            overall_audit_agg.lock_attempt_count += phase_audit_aggs[p].lock_attempt_count;
+            overall_audit_agg.lock_contended_count += phase_audit_aggs[p].lock_contended_count;
+            overall_audit_agg.lock_wait_nanos += phase_audit_aggs[p].lock_wait_nanos;
+            overall_audit_agg.gets += phase_audit_aggs[p].gets;
+            overall_audit_agg.puts += phase_audit_aggs[p].puts;
+            overall_audit_agg.dels += phase_audit_aggs[p].dels;
+            overall_probe_stats.MergeFrom(phase_probe);
+        }
+        if (wps_out.is_open()) wps_out.close();
+
+        overall_audit_agg.probe_gets = overall_probe_stats.get_count;
+        overall_audit_agg.avg_sealed_runs = overall_probe_stats.get_count > 0 ? static_cast<double>(overall_probe_stats.sealed_runs_sum) / overall_probe_stats.get_count : 0.0;
+        overall_audit_agg.max_sealed_runs = overall_probe_stats.sealed_runs_max;
+        overall_audit_agg.avg_open_delta = overall_probe_stats.get_count > 0 ? static_cast<double>(overall_probe_stats.open_delta_entries_sum) / overall_probe_stats.get_count : 0.0;
+        overall_audit_agg.max_open_delta = overall_probe_stats.open_delta_entries_max;
+
+        audit_mat_count = overall_audit_agg.mat_count;
+        audit_mat_nanos = overall_audit_agg.mat_nanos;
+        audit_cache_inv_count = overall_audit_agg.cache_inv_count;
+        audit_lock_attempt_count = overall_audit_agg.lock_attempt_count;
+        audit_lock_contended_count = overall_audit_agg.lock_contended_count;
+        audit_lock_wait_nanos = overall_audit_agg.lock_wait_nanos;
+
+        get_probe_avg_sealed_runs = overall_audit_agg.avg_sealed_runs;
+        get_probe_max_sealed_runs = overall_audit_agg.max_sealed_runs;
+        get_probe_avg_open_delta = overall_audit_agg.avg_open_delta;
+        get_probe_max_open_delta = overall_audit_agg.max_open_delta;
+
+        if (overall_probe_stats.get_count > 0) {
+            uint64_t running = 0;
+            uint64_t target_p50 = static_cast<uint64_t>(overall_probe_stats.get_count * 0.50);
+            uint64_t target_p90 = static_cast<uint64_t>(overall_probe_stats.get_count * 0.90);
+            uint64_t target_p99 = static_cast<uint64_t>(overall_probe_stats.get_count * 0.99);
+            bool found_p50 = false, found_p90 = false, found_p99 = false;
+            for (uint32_t i = 0; i < 64; ++i) {
+                running += overall_probe_stats.sealed_runs_hist[i];
+                if (!found_p50 && running >= target_p50) {
+                    get_probe_p50_sealed_runs = i;
+                    found_p50 = true;
+                }
+                if (!found_p90 && running >= target_p90) {
+                    get_probe_p90_sealed_runs = i;
+                    found_p90 = true;
+                }
+                if (!found_p99 && running >= target_p99) {
+                    get_probe_p99_sealed_runs = i;
+                    found_p99 = true;
+                }
             }
-            if (!found_p99 && running >= target_p99) {
-                get_probe_p99_sealed_runs = i;
-                found_p99 = true;
-            }
+        }
+
+        if (cfg.config_name == "AMTV-M2c-T0" || cfg.config_name == "AMTV-T0") {
+            CHECK_INVARIANT(audit_mat_count == 0, "AMTV-T0 had %lu active MemTable materializations on GetOnly path!", audit_mat_count);
         }
     }
 #endif
+
+    // Read write-side audit timings and discarded merge metrics from AMTVState
+    uint64_t amtv_write_state_lock_wait_nanos = 0;
+    uint64_t amtv_write_append_nanos = 0;
+    uint64_t amtv_write_snapshot_clone_nanos = 0;
+    uint64_t amtv_write_seal_build_nanos = 0;
+    uint64_t amtv_write_publish_nanos = 0;
+    uint64_t amtv_merge_discarded_wall_time_us = 0;
+    uint64_t amtv_merge_discarded_cpu_time_us = 0;
+
+    rocksdb::ColumnFamilyData* amtv_cfd =
+        static_cast<rocksdb::ColumnFamilyHandleImpl*>(db->DefaultColumnFamily())->cfd();
+    if (amtv_cfd && amtv_cfd->mem() && amtv_cfd->mem()->GetAMTVState()) {
+        auto* astate = amtv_cfd->mem()->GetAMTVState();
+#ifdef ROCKSDB_READ_PATH_AUDIT
+        amtv_write_state_lock_wait_nanos = astate->amtv_write_state_lock_wait_nanos();
+        amtv_write_append_nanos = astate->amtv_write_append_nanos();
+        amtv_write_snapshot_clone_nanos = astate->amtv_write_snapshot_clone_nanos();
+        amtv_write_seal_build_nanos = astate->amtv_write_seal_build_nanos();
+        amtv_write_publish_nanos = astate->amtv_write_publish_nanos();
+#endif
+        amtv_merge_discarded_wall_time_us = astate->total_discarded_merge_wall_time_nanos() / 1000;
+        amtv_merge_discarded_cpu_time_us = astate->total_discarded_merge_cpu_time_nanos() / 1000;
+    }
 
     // Compute Engine Output Write Amplification
     uint64_t put_value_bytes = 60000ULL * 256ULL;
@@ -1371,7 +1504,59 @@ int main(int argc, char** argv) {
        << "  \"audit_cache_inv_count\": " << audit_cache_inv_count << ",\n"
        << "  \"audit_lock_attempt_count\": " << audit_lock_attempt_count << ",\n"
        << "  \"audit_lock_contended_count\": " << audit_lock_contended_count << ",\n"
-       << "  \"audit_lock_wait_nanos\": " << audit_lock_wait_nanos << "\n"
+       << "  \"audit_lock_wait_nanos\": " << audit_lock_wait_nanos << ",\n"
+       << "  \"amtv_write_state_lock_wait_nanos\": " << amtv_write_state_lock_wait_nanos << ",\n"
+       << "  \"amtv_write_append_nanos\": " << amtv_write_append_nanos << ",\n"
+       << "  \"amtv_write_snapshot_clone_nanos\": " << amtv_write_snapshot_clone_nanos << ",\n"
+       << "  \"amtv_write_seal_build_nanos\": " << amtv_write_seal_build_nanos << ",\n"
+       << "  \"amtv_write_publish_nanos\": " << amtv_write_publish_nanos << ",\n"
+       << "  \"amtv_merge_discarded_wall_time_us\": " << amtv_merge_discarded_wall_time_us << ",\n"
+       << "  \"amtv_merge_discarded_cpu_time_us\": " << amtv_merge_discarded_cpu_time_us << ",\n"
+       << "  \"audit_phase_a\": {\n"
+       << "    \"mat_count\": " << phase_audit_aggs[0].mat_count << ",\n"
+       << "    \"mat_nanos\": " << phase_audit_aggs[0].mat_nanos << ",\n"
+       << "    \"lock_attempt_count\": " << phase_audit_aggs[0].lock_attempt_count << ",\n"
+       << "    \"lock_contended_count\": " << phase_audit_aggs[0].lock_contended_count << ",\n"
+       << "    \"lock_wait_nanos\": " << phase_audit_aggs[0].lock_wait_nanos << ",\n"
+       << "    \"cache_inv_count\": " << phase_audit_aggs[0].cache_inv_count << ",\n"
+       << "    \"gets\": " << phase_audit_aggs[0].gets << ",\n"
+       << "    \"puts\": " << phase_audit_aggs[0].puts << ",\n"
+       << "    \"dels\": " << phase_audit_aggs[0].dels << ",\n"
+       << "    \"avg_sealed_runs\": " << phase_audit_aggs[0].avg_sealed_runs << ",\n"
+       << "    \"max_sealed_runs\": " << phase_audit_aggs[0].max_sealed_runs << ",\n"
+       << "    \"avg_open_delta\": " << phase_audit_aggs[0].avg_open_delta << ",\n"
+       << "    \"max_open_delta\": " << phase_audit_aggs[0].max_open_delta << "\n"
+       << "  },\n"
+       << "  \"audit_phase_b\": {\n"
+       << "    \"mat_count\": " << phase_audit_aggs[1].mat_count << ",\n"
+       << "    \"mat_nanos\": " << phase_audit_aggs[1].mat_nanos << ",\n"
+       << "    \"lock_attempt_count\": " << phase_audit_aggs[1].lock_attempt_count << ",\n"
+       << "    \"lock_contended_count\": " << phase_audit_aggs[1].lock_contended_count << ",\n"
+       << "    \"lock_wait_nanos\": " << phase_audit_aggs[1].lock_wait_nanos << ",\n"
+       << "    \"cache_inv_count\": " << phase_audit_aggs[1].cache_inv_count << ",\n"
+       << "    \"gets\": " << phase_audit_aggs[1].gets << ",\n"
+       << "    \"puts\": " << phase_audit_aggs[1].puts << ",\n"
+       << "    \"dels\": " << phase_audit_aggs[1].dels << ",\n"
+       << "    \"avg_sealed_runs\": " << phase_audit_aggs[1].avg_sealed_runs << ",\n"
+       << "    \"max_sealed_runs\": " << phase_audit_aggs[1].max_sealed_runs << ",\n"
+       << "    \"avg_open_delta\": " << phase_audit_aggs[1].avg_open_delta << ",\n"
+       << "    \"max_open_delta\": " << phase_audit_aggs[1].max_open_delta << "\n"
+       << "  },\n"
+       << "  \"audit_phase_c\": {\n"
+       << "    \"mat_count\": " << phase_audit_aggs[2].mat_count << ",\n"
+       << "    \"mat_nanos\": " << phase_audit_aggs[2].mat_nanos << ",\n"
+       << "    \"lock_attempt_count\": " << phase_audit_aggs[2].lock_attempt_count << ",\n"
+       << "    \"lock_contended_count\": " << phase_audit_aggs[2].lock_contended_count << ",\n"
+       << "    \"lock_wait_nanos\": " << phase_audit_aggs[2].lock_wait_nanos << ",\n"
+       << "    \"cache_inv_count\": " << phase_audit_aggs[2].cache_inv_count << ",\n"
+       << "    \"gets\": " << phase_audit_aggs[2].gets << ",\n"
+       << "    \"puts\": " << phase_audit_aggs[2].puts << ",\n"
+       << "    \"dels\": " << phase_audit_aggs[2].dels << ",\n"
+       << "    \"avg_sealed_runs\": " << phase_audit_aggs[2].avg_sealed_runs << ",\n"
+       << "    \"max_sealed_runs\": " << phase_audit_aggs[2].max_sealed_runs << ",\n"
+       << "    \"avg_open_delta\": " << phase_audit_aggs[2].avg_open_delta << ",\n"
+       << "    \"max_open_delta\": " << phase_audit_aggs[2].max_open_delta << "\n"
+       << "  }\n"
        << "}\n";
     jf.close();
 
