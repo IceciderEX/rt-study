@@ -174,6 +174,44 @@ struct M2dRunConfig {
     int amtv_hard_layer_limit = 0;
 };
 
+static inline const char* MergeTaskStateToString(rocksdb::MergeTaskState st) {
+    switch (st) {
+        case rocksdb::MergeTaskState::kIdle: return "kIdle";
+        case rocksdb::MergeTaskState::kSubmitting: return "kSubmitting";
+        case rocksdb::MergeTaskState::kQueued: return "kQueued";
+        case rocksdb::MergeTaskState::kRunning: return "kRunning";
+        default: return "kUnknown";
+    }
+}
+
+static inline const char* AMTVDiagnosticPhaseToString(rocksdb::AMTVDiagnosticPhase ph) {
+    switch (ph) {
+        case rocksdb::AMTVDiagnosticPhase::kIdle: return "kIdle";
+        case rocksdb::AMTVDiagnosticPhase::kSubmitting: return "kSubmitting";
+        case rocksdb::AMTVDiagnosticPhase::kQueued: return "kQueued";
+        case rocksdb::AMTVDiagnosticPhase::kComputing: return "kComputing";
+        case rocksdb::AMTVDiagnosticPhase::kPublishing: return "kPublishing";
+        default: return "kUnknown";
+    }
+}
+
+struct BoundarySnapshot {
+    std::string boundary_name;
+    double timestamp_sec = 0.0;
+    uint64_t cumulative_flush_bytes = 0;
+    uint64_t cumulative_compaction_read_bytes = 0;
+    uint64_t cumulative_compaction_write_bytes = 0;
+    uint64_t l0_files = 0;
+    uint64_t pending_compaction_bytes = 0;
+    uint64_t num_immutable_mem_table = 0;
+    uint64_t running_flushes = 0;
+    uint64_t running_compactions = 0;
+    std::string amtv_task_state = "N/A";
+    std::string amtv_diag_phase = "N/A";
+    std::string amtv_sealed_runs = "N/A";
+    std::string amtv_open_delta_len = "N/A";
+};
+
 static void BuildCanonicalSeedDb(const std::string& seed_path, uint64_t total_keys) {
     std::cout << "\n======================================================================\n";
     std::cout << "Building Canonical Seed DB at: " << seed_path << "\n";
@@ -602,6 +640,37 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     // Window 1: Foreground Execution Window
     // -----------------------------------------------------------------------
+    auto capture_boundary = [&](const std::string& name, double ts_sec) -> BoundarySnapshot {
+        BoundarySnapshot b;
+        b.boundary_name = name;
+        b.timestamp_sec = ts_sec;
+        b.cumulative_flush_bytes = listener->GetTotalCumulativeFlushBytes();
+        b.cumulative_compaction_read_bytes = listener->GetTotalCumulativeCompactionReadBytes();
+        b.cumulative_compaction_write_bytes = listener->GetTotalCumulativeCompactionWriteBytes();
+        db->GetIntProperty("rocksdb.num-files-at-level0", &b.l0_files);
+        db->GetIntProperty("rocksdb.estimate-pending-compaction-bytes", &b.pending_compaction_bytes);
+        db->GetIntProperty("rocksdb.num-immutable-mem-table", &b.num_immutable_mem_table);
+        db->GetIntProperty("rocksdb.num-running-flushes", &b.running_flushes);
+        db->GetIntProperty("rocksdb.num-running-compactions", &b.running_compactions);
+        if (options.enable_amtv) {
+            rocksdb::ColumnFamilyData* cur_cfd =
+                static_cast<rocksdb::ColumnFamilyHandleImpl*>(db->DefaultColumnFamily())->cfd();
+            if (cur_cfd && cur_cfd->mem() && cur_cfd->mem()->GetAMTVState()) {
+                auto* state = cur_cfd->mem()->GetAMTVState();
+                b.amtv_task_state = MergeTaskStateToString(state->task_state());
+                b.amtv_diag_phase = AMTVDiagnosticPhaseToString(state->diagnostic_phase());
+                auto snap = state->GetSnapshot();
+                if (snap) {
+                    b.amtv_sealed_runs = std::to_string(snap->sealed_run_count());
+                    b.amtv_open_delta_len = std::to_string(snap->open_delta ? snap->open_delta->size() : 0);
+                }
+            }
+        }
+        return b;
+    };
+
+    BoundarySnapshot b0 = capture_boundary("B0_BASELINE", 0.0);
+
     std::cout << "  [Window 1] Running Phase A...\n";
     auto fg_start = std::chrono::steady_clock::now();
     run_phase(0, "PHASE_A");
@@ -655,6 +724,7 @@ int main(int argc, char** argv) {
     double fg_iops = 300000.0 / fg_elapsed_sec;
 
     std::cout << "  [Window 1] Foreground finished in " << fg_elapsed_sec << " s (IOPS: " << fg_iops << ")\n";
+    BoundarySnapshot b1 = capture_boundary("B1_FOREGROUND_END", fg_elapsed_sec);
 
     // -----------------------------------------------------------------------
     // Window 2: Fixed Cooldown Window (Strict 10 Seconds)
@@ -663,6 +733,9 @@ int main(int argc, char** argv) {
     rocksdb::AMTVTimelineLogger::Get().SetPhase("COOLDOWN");
     listener->StartCooldownObservation();
     std::this_thread::sleep_for(std::chrono::seconds(10));
+    auto cd_end = std::chrono::steady_clock::now();
+    double cd_elapsed_sec = std::chrono::duration<double>(cd_end - fg_start).count();
+    BoundarySnapshot b2 = capture_boundary("B2_COOLDOWN_END", cd_elapsed_sec);
     std::cout << "  [Window 2] Fixed Cooldown Window completed.\n";
 
     // -----------------------------------------------------------------------
@@ -670,7 +743,7 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     std::cout << "  [Window 3] Entering Drain-to-Stable Window (timeout 120s)...\n";
     rocksdb::AMTVTimelineLogger::Get().SetPhase("DRAIN");
-    listener->StartVerificationStage();
+    listener->StartDrainStage();
     auto drain_start = std::chrono::steady_clock::now();
     bool drain_converged = false;
     double drain_elapsed_sec = 0.0;
@@ -729,6 +802,10 @@ int main(int argc, char** argv) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+
+    auto drain_end = std::chrono::steady_clock::now();
+    double drain_end_ts = std::chrono::duration<double>(drain_end - fg_start).count();
+    BoundarySnapshot b3 = capture_boundary("B3_DRAIN_END", drain_end_ts);
 
     // Capture Drained Final State
     uint32_t drained_sealed_runs = 0;
@@ -791,6 +868,7 @@ int main(int argc, char** argv) {
     // Step 4: External State Model & Full 500,000 Key DB Verification
     // -----------------------------------------------------------------------
     std::cout << "  [Verification] Executing External State Model & Full 500,000 Key Get() Reconcile...\n";
+    listener->StartVerificationStage();
     ExternalStateModel model(cfg.total_keys);
     for (int w = 0; w < cfg.num_workers; ++w) {
         for (const auto& rec : worker_traces[w]) {
@@ -857,15 +935,76 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     // Step 5: Gather Metrics & Enforce Fail-Fast Gates
     // -----------------------------------------------------------------------
-    uint64_t fg_flush_bytes = listener->GetForegroundFlushBytes();
-    uint64_t fg_compaction_read_bytes = listener->GetForegroundCompactionReadBytes();
-    uint64_t fg_compaction_write_bytes = listener->GetForegroundCompactionWriteBytes();
-    uint64_t fg_capacity_flushes = listener->GetForegroundFlushCountByReason(rocksdb::FlushReason::kWriteBufferFull);
-    uint64_t fg_threshold_flushes = listener->GetForegroundFlushCountByReason(rocksdb::FlushReason::kMemtableMaxRangeDeletions);
+    uint64_t w1_flush_bytes = (b1.cumulative_flush_bytes >= b0.cumulative_flush_bytes) ? (b1.cumulative_flush_bytes - b0.cumulative_flush_bytes) : 0;
+    uint64_t w1_compaction_write_bytes = (b1.cumulative_compaction_write_bytes >= b0.cumulative_compaction_write_bytes) ? (b1.cumulative_compaction_write_bytes - b0.cumulative_compaction_write_bytes) : 0;
+    uint64_t w1_compaction_read_bytes = (b1.cumulative_compaction_read_bytes >= b0.cumulative_compaction_read_bytes) ? (b1.cumulative_compaction_read_bytes - b0.cumulative_compaction_read_bytes) : 0;
+    uint64_t w1_output_bytes = w1_flush_bytes + w1_compaction_write_bytes;
 
-    // Gate 1: T0 configs must have 0 capacity flushes
+    uint64_t w2_flush_bytes = (b2.cumulative_flush_bytes >= b1.cumulative_flush_bytes) ? (b2.cumulative_flush_bytes - b1.cumulative_flush_bytes) : 0;
+    uint64_t w2_compaction_write_bytes = (b2.cumulative_compaction_write_bytes >= b1.cumulative_compaction_write_bytes) ? (b2.cumulative_compaction_write_bytes - b1.cumulative_compaction_write_bytes) : 0;
+    uint64_t w2_compaction_read_bytes = (b2.cumulative_compaction_read_bytes >= b1.cumulative_compaction_read_bytes) ? (b2.cumulative_compaction_read_bytes - b1.cumulative_compaction_read_bytes) : 0;
+    uint64_t w2_output_bytes = w2_flush_bytes + w2_compaction_write_bytes;
+
+    uint64_t w3_flush_bytes = (b3.cumulative_flush_bytes >= b2.cumulative_flush_bytes) ? (b3.cumulative_flush_bytes - b2.cumulative_flush_bytes) : 0;
+    uint64_t w3_compaction_write_bytes = (b3.cumulative_compaction_write_bytes >= b2.cumulative_compaction_write_bytes) ? (b3.cumulative_compaction_write_bytes - b2.cumulative_compaction_write_bytes) : 0;
+    uint64_t w3_compaction_read_bytes = (b3.cumulative_compaction_read_bytes >= b2.cumulative_compaction_read_bytes) ? (b3.cumulative_compaction_read_bytes - b2.cumulative_compaction_read_bytes) : 0;
+    uint64_t w3_output_bytes = w3_flush_bytes + w3_compaction_write_bytes;
+
+    uint64_t three_window_flush_bytes = w1_flush_bytes + w2_flush_bytes + w3_flush_bytes;
+    uint64_t three_window_compaction_write_bytes = w1_compaction_write_bytes + w2_compaction_write_bytes + w3_compaction_write_bytes;
+    uint64_t three_window_compaction_read_bytes = w1_compaction_read_bytes + w2_compaction_read_bytes + w3_compaction_read_bytes;
+    uint64_t three_window_output_bytes = w1_output_bytes + w2_output_bytes + w3_output_bytes;
+
+    const uint64_t put_value_bytes = 60000ULL * 256ULL;
+    double pwa_fg = static_cast<double>(w1_output_bytes) / put_value_bytes;
+    double pwa_cooldown = static_cast<double>(w2_output_bytes) / put_value_bytes;
+    double pwa_drain = static_cast<double>(w3_output_bytes) / put_value_bytes;
+    double pwa_total = static_cast<double>(three_window_output_bytes) / put_value_bytes;
+
+    uint64_t fg_flush_bytes = w1_flush_bytes;
+    uint64_t fg_compaction_read_bytes = w1_compaction_read_bytes;
+    uint64_t fg_compaction_write_bytes = w1_compaction_write_bytes;
+    double engine_output_wa = pwa_total;
+
+    auto flush_events = listener->GetFlushEvents();
+    uint64_t total_capacity_flushes = 0;
+    uint64_t total_threshold_flushes = 0;
+    uint64_t total_other_flushes = 0;
+    std::vector<std::string> flush_reasons_seq;
+
+    for (const auto& fe : flush_events) {
+        if (fe.stage == study::formal::EventStage::kPreload) continue;
+        const char* r_str = rocksdb::GetFlushReasonString(fe.flush_reason);
+        std::string reason_name = r_str ? r_str : "kUnknown";
+        flush_reasons_seq.push_back(reason_name);
+
+        if (fe.flush_reason == rocksdb::FlushReason::kWriteBufferFull) {
+            total_capacity_flushes++;
+        } else if (fe.flush_reason == rocksdb::FlushReason::kMemtableMaxRangeDeletions) {
+            total_threshold_flushes++;
+        } else {
+            total_other_flushes++;
+        }
+    }
+
+    uint64_t fg_capacity_flushes = total_capacity_flushes;
+    uint64_t fg_threshold_flushes = total_threshold_flushes;
+
+    // Gate 1: Flush reason verification across 3 measurement windows
     if (cfg.config_name.find("T0") != std::string::npos || cfg.config_name.find("B") == 0) {
-        CHECK_INVARIANT(fg_capacity_flushes == 0, "T0 config %s experienced %lu natural capacity flushes!", cfg.config_name.c_str(), fg_capacity_flushes);
+        CHECK_INVARIANT(total_capacity_flushes == 0,
+            "T0 config %s experienced %lu natural capacity flushes across 3 measurement windows!",
+            cfg.config_name.c_str(), total_capacity_flushes);
+    } else if (cfg.config_name.find("T512") != std::string::npos) {
+        CHECK_INVARIANT(total_capacity_flushes == 0,
+            "T512 config %s experienced %lu unexpected natural capacity flushes!",
+            cfg.config_name.c_str(), total_capacity_flushes);
+        CHECK_INVARIANT(total_other_flushes == 0,
+            "T512 config %s experienced %lu unexpected non-threshold flushes!",
+            cfg.config_name.c_str(), total_other_flushes);
+        CHECK_INVARIANT(total_threshold_flushes > 0,
+            "T512 config %s expected threshold flushes, but got 0!",
+            cfg.config_name.c_str());
     }
 
     // Gather AMTV metrics
@@ -1024,14 +1163,35 @@ int main(int argc, char** argv) {
         }
     }
 
-    double get_p50 = 0, get_p90 = 0, get_p95 = 0, get_p99 = 0, get_p999 = 0, get_mean = 0, get_max = 0;
-    agg_get_all.ComputeQuantiles(get_p50, get_p90, get_p95, get_p99, get_p999, get_mean, get_max);
+    struct LatencyQuantiles {
+        double p50 = 0, p90 = 0, p95 = 0, p99 = 0, p999 = 0, mean = 0, max = 0;
+        uint64_t count = 0;
+    };
+    auto calc_q = [](const study::formal::ThreadLocalHistogram& h) -> LatencyQuantiles {
+        LatencyQuantiles q;
+        q.count = h.GetCount();
+        if (q.count > 0) {
+            h.ComputeQuantiles(q.p50, q.p90, q.p95, q.p99, q.p999, q.mean, q.max);
+        }
+        return q;
+    };
 
-    double put_p50 = 0, put_p90 = 0, put_p95 = 0, put_p99 = 0, put_p999 = 0, put_mean = 0, put_max = 0;
-    agg_put_all.ComputeQuantiles(put_p50, put_p90, put_p95, put_p99, put_p999, put_mean, put_max);
+    LatencyQuantiles get_overall_q = calc_q(agg_get_all);
+    LatencyQuantiles put_overall_q = calc_q(agg_put_all);
+    LatencyQuantiles del_overall_q = calc_q(agg_del_all);
 
-    double del_p50 = 0, del_p90 = 0, del_p95 = 0, del_p99 = 0, del_p999 = 0, del_mean = 0, del_max = 0;
-    agg_del_all.ComputeQuantiles(del_p50, del_p90, del_p95, del_p99, del_p999, del_mean, del_max);
+    std::vector<LatencyQuantiles> get_phase_q(3);
+    std::vector<LatencyQuantiles> put_phase_q(3);
+    std::vector<LatencyQuantiles> del_phase_q(3);
+    for (int p = 0; p < 3; ++p) {
+        get_phase_q[p] = calc_q(agg_get_phase[p]);
+        put_phase_q[p] = calc_q(agg_put_phase[p]);
+        del_phase_q[p] = calc_q(agg_del_phase[p]);
+    }
+
+    double get_p50 = get_overall_q.p50, get_p90 = get_overall_q.p90, get_p95 = get_overall_q.p95, get_p99 = get_overall_q.p99, get_p999 = get_overall_q.p999, get_mean = get_overall_q.mean, get_max = get_overall_q.max;
+    double put_p50 = put_overall_q.p50, put_p90 = put_overall_q.p90, put_p95 = put_overall_q.p95, put_p99 = put_overall_q.p99, put_p999 = put_overall_q.p999, put_mean = put_overall_q.mean, put_max = put_overall_q.max;
+    double del_p50 = del_overall_q.p50, del_p90 = del_overall_q.p90, del_p95 = del_overall_q.p95, del_p99 = del_overall_q.p99, del_p999 = del_overall_q.p999, del_mean = del_overall_q.mean, del_max = del_overall_q.max;
 
     double post_fallback_p50 = 0, post_fallback_p90 = 0, post_fallback_p95 = 0, post_fallback_p99 = 0, post_fallback_p999 = 0, post_fallback_mean = 0, post_fallback_max = 0;
     agg_get_post_fallback.ComputeQuantiles(post_fallback_p50, post_fallback_p90, post_fallback_p95, post_fallback_p99, post_fallback_p999, post_fallback_mean, post_fallback_max);
@@ -1204,10 +1364,6 @@ int main(int argc, char** argv) {
         amtv_merge_discarded_cpu_time_us = astate->total_discarded_merge_cpu_time_nanos() / 1000;
     }
 
-    // Compute Engine Output Write Amplification
-    uint64_t put_value_bytes = 60000ULL * 256ULL;
-    double engine_output_wa = static_cast<double>(fg_flush_bytes + fg_compaction_write_bytes) / put_value_bytes;
-
     uint64_t l0_files_peak = 0;
     db->GetIntProperty("rocksdb.num-files-at-level0", &l0_files_peak);
     uint64_t pending_compaction_bytes = 0;
@@ -1357,9 +1513,17 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     // Step 7: Output JSON and Append to Summary CSV
     // -----------------------------------------------------------------------
-    std::string out_json_path = cfg.output_dir + "/" + cfg.exp_id + ".json";
-    std::ofstream jf(out_json_path);
-    CHECK_INVARIANT(jf.is_open(), "Failed to open output JSON: %s", out_json_path.c_str());
+    // -----------------------------------------------------------------------
+    // Step 7: Output JSON and Append to Summary CSV
+    // -----------------------------------------------------------------------
+    // Close DB cleanly before recording post-measurement teardown output
+    db.reset();
+
+    uint64_t teardown_total_flush_bytes = listener->GetTotalCumulativeFlushBytes();
+    uint64_t teardown_total_compaction_write_bytes = listener->GetTotalCumulativeCompactionWriteBytes();
+    uint64_t post_teardown_flush_bytes = (teardown_total_flush_bytes >= b3.cumulative_flush_bytes) ? (teardown_total_flush_bytes - b3.cumulative_flush_bytes) : 0;
+    uint64_t post_teardown_compaction_write_bytes = (teardown_total_compaction_write_bytes >= b3.cumulative_compaction_write_bytes) ? (teardown_total_compaction_write_bytes - b3.cumulative_compaction_write_bytes) : 0;
+    uint64_t post_measurement_teardown_output = post_teardown_flush_bytes + post_teardown_compaction_write_bytes;
 
     auto map_to_json = [](const auto& m) {
         std::ostringstream s;
@@ -1374,44 +1538,164 @@ int main(int argc, char** argv) {
         return s.str();
     };
 
+    auto amtv_num = [&](const auto& val) -> std::string {
+        if (!options.enable_amtv) return "\"N/A\"";
+        std::ostringstream ss;
+        ss << val;
+        return ss.str();
+    };
+    auto amtv_str = [&](const std::string& val) -> std::string {
+        if (!options.enable_amtv) return "\"N/A\"";
+        return "\"" + val + "\"";
+    };
+    auto amtv_bool = [&](bool val) -> std::string {
+        if (!options.enable_amtv) return "\"N/A\"";
+        return val ? "true" : "false";
+    };
+    auto amtv_map = [&](const auto& m) -> std::string {
+        if (!options.enable_amtv) return "\"N/A\"";
+        return map_to_json(m);
+    };
+
+    auto boundary_to_json = [](const BoundarySnapshot& b) {
+        std::ostringstream ss;
+        ss << "{\n"
+           << "      \"boundary_name\": \"" << b.boundary_name << "\",\n"
+           << "      \"timestamp_sec\": " << b.timestamp_sec << ",\n"
+           << "      \"cumulative_flush_bytes\": " << b.cumulative_flush_bytes << ",\n"
+           << "      \"cumulative_compaction_read_bytes\": " << b.cumulative_compaction_read_bytes << ",\n"
+           << "      \"cumulative_compaction_write_bytes\": " << b.cumulative_compaction_write_bytes << ",\n"
+           << "      \"l0_files\": " << b.l0_files << ",\n"
+           << "      \"pending_compaction_bytes\": " << b.pending_compaction_bytes << ",\n"
+           << "      \"num_immutable_mem_table\": " << b.num_immutable_mem_table << ",\n"
+           << "      \"running_flushes\": " << b.running_flushes << ",\n"
+           << "      \"running_compactions\": " << b.running_compactions << ",\n"
+           << "      \"amtv_task_state\": \"" << b.amtv_task_state << "\",\n"
+           << "      \"amtv_diag_phase\": \"" << b.amtv_diag_phase << "\",\n"
+           << "      \"amtv_sealed_runs\": \"" << b.amtv_sealed_runs << "\",\n"
+           << "      \"amtv_open_delta_len\": \"" << b.amtv_open_delta_len << "\"\n"
+           << "    }";
+        return ss.str();
+    };
+
+    std::ostringstream fr_oss;
+    fr_oss << "[";
+    for (size_t idx = 0; idx < flush_reasons_seq.size(); ++idx) {
+        if (idx > 0) fr_oss << ", ";
+        fr_oss << "\"" << flush_reasons_seq[idx] << "\"";
+    }
+    fr_oss << "]";
+    std::string flush_reasons_json = fr_oss.str();
+
+    std::string out_json_path = cfg.output_dir + "/" + cfg.exp_id + ".json";
+    std::ofstream jf(out_json_path);
+    CHECK_INVARIANT(jf.is_open(), "Failed to open output JSON: %s", out_json_path.c_str());
+
     jf << "{\n"
        << "  \"exp_id\": \"" << cfg.exp_id << "\",\n"
        << "  \"config_name\": \"" << cfg.config_name << "\",\n"
        << "  \"mode\": \"" << cfg.mode << "\",\n"
        << "  \"rep\": " << cfg.rep << ",\n"
-       << "  \"delta_tombstones\": " << options.amtv_delta_tombstones << ",\n"
-       << "  \"hard_layer_limit\": " << options.amtv_hard_layer_limit << ",\n"
+       << "  \"delta_tombstones\": " << amtv_num(options.amtv_delta_tombstones) << ",\n"
+       << "  \"hard_layer_limit\": " << amtv_num(options.amtv_hard_layer_limit) << ",\n"
        << "  \"fg_elapsed_sec\": " << fg_elapsed_sec << ",\n"
        << "  \"fg_iops\": " << fg_iops << ",\n"
        << "  \"phase_a_sec\": " << phase_elapsed_sec[0] << ",\n"
        << "  \"phase_b_sec\": " << phase_elapsed_sec[1] << ",\n"
        << "  \"phase_c_sec\": " << phase_elapsed_sec[2] << ",\n"
+       << "  \"write_amplification_name\": \"前三测量窗口内引擎输出写放大（按前台Put Value字节归一化）\",\n"
+       << "  \"write_amplification_note\": \"不含WAL、设备层写放大和关闭阶段输出\",\n"
+       << "  \"pwa_fg\": " << pwa_fg << ",\n"
+       << "  \"pwa_cooldown\": " << pwa_cooldown << ",\n"
+       << "  \"pwa_drain\": " << pwa_drain << ",\n"
+       << "  \"pwa_total\": " << pwa_total << ",\n"
+       << "  \"engine_output_wa\": " << pwa_total << ",\n"
+       << "  \"engine_output_wa_description\": \"前三测量窗口内 Flush/Compaction 引擎输出写放大 (按前台Put Value字节归一化, 不含WAL、设备层写放大和关闭阶段输出)\",\n"
+       << "  \"window1_foreground_flush_bytes\": " << w1_flush_bytes << ",\n"
+       << "  \"window1_foreground_compaction_write_bytes\": " << w1_compaction_write_bytes << ",\n"
+       << "  \"window1_foreground_compaction_read_bytes\": " << w1_compaction_read_bytes << ",\n"
+       << "  \"window1_foreground_output_bytes\": " << w1_output_bytes << ",\n"
+       << "  \"window2_cooldown_flush_bytes\": " << w2_flush_bytes << ",\n"
+       << "  \"window2_cooldown_compaction_write_bytes\": " << w2_compaction_write_bytes << ",\n"
+       << "  \"window2_cooldown_compaction_read_bytes\": " << w2_compaction_read_bytes << ",\n"
+       << "  \"window2_cooldown_output_bytes\": " << w2_output_bytes << ",\n"
+       << "  \"window3_drain_flush_bytes\": " << w3_flush_bytes << ",\n"
+       << "  \"window3_drain_compaction_write_bytes\": " << w3_compaction_write_bytes << ",\n"
+       << "  \"window3_drain_compaction_read_bytes\": " << w3_compaction_read_bytes << ",\n"
+       << "  \"window3_drain_output_bytes\": " << w3_output_bytes << ",\n"
+       << "  \"three_window_flush_bytes\": " << three_window_flush_bytes << ",\n"
+       << "  \"three_window_compaction_write_bytes\": " << three_window_compaction_write_bytes << ",\n"
+       << "  \"three_window_compaction_read_bytes\": " << three_window_compaction_read_bytes << ",\n"
+       << "  \"three_window_output_bytes\": " << three_window_output_bytes << ",\n"
+       << "  \"put_value_bytes\": " << put_value_bytes << ",\n"
+       << "  \"post_measurement_teardown_output\": " << post_measurement_teardown_output << ",\n"
+       << "  \"post_measurement_teardown_flush_bytes\": " << post_teardown_flush_bytes << ",\n"
+       << "  \"post_measurement_teardown_compaction_write_bytes\": " << post_teardown_compaction_write_bytes << ",\n"
+       << "  \"total_capacity_flushes\": " << total_capacity_flushes << ",\n"
+       << "  \"total_threshold_flushes\": " << total_threshold_flushes << ",\n"
+       << "  \"total_other_flushes\": " << total_other_flushes << ",\n"
+       << "  \"flush_reasons\": " << flush_reasons_json << ",\n"
+       << "  \"boundary_telemetry\": {\n"
+       << "    \"b0_baseline\": " << boundary_to_json(b0) << ",\n"
+       << "    \"b1_foreground_end\": " << boundary_to_json(b1) << ",\n"
+       << "    \"b2_cooldown_end\": " << boundary_to_json(b2) << ",\n"
+       << "    \"b3_drain_end\": " << boundary_to_json(b3) << "\n"
+       << "  },\n"
        << "  \"get_live_p50_us\": " << get_p50 << ",\n"
        << "  \"get_live_p95_us\": " << get_p95 << ",\n"
        << "  \"get_live_p99_us\": " << get_p99 << ",\n"
        << "  \"get_live_p999_us\": " << get_p999 << ",\n"
        << "  \"get_live_max_us\": " << get_max << ",\n"
+       << "  \"phase_a_get_p50_us\": " << get_phase_q[0].p50 << ",\n"
+       << "  \"phase_a_get_p95_us\": " << get_phase_q[0].p95 << ",\n"
+       << "  \"phase_a_get_p99_us\": " << get_phase_q[0].p99 << ",\n"
+       << "  \"phase_b_get_p50_us\": " << get_phase_q[1].p50 << ",\n"
+       << "  \"phase_b_get_p95_us\": " << get_phase_q[1].p95 << ",\n"
+       << "  \"phase_b_get_p99_us\": " << get_phase_q[1].p99 << ",\n"
+       << "  \"phase_c_get_p50_us\": " << get_phase_q[2].p50 << ",\n"
+       << "  \"phase_c_get_p95_us\": " << get_phase_q[2].p95 << ",\n"
+       << "  \"phase_c_get_p99_us\": " << get_phase_q[2].p99 << ",\n"
+       << "  \"put_p50_us\": " << put_p50 << ",\n"
+       << "  \"put_p95_us\": " << put_p95 << ",\n"
+       << "  \"put_p99_us\": " << put_p99 << ",\n"
+       << "  \"put_p999_us\": " << put_p999 << ",\n"
+       << "  \"put_max_us\": " << put_max << ",\n"
+       << "  \"delete_range_p50_us\": " << del_p50 << ",\n"
+       << "  \"delete_range_p95_us\": " << del_p95 << ",\n"
+       << "  \"delete_range_p99_us\": " << del_p99 << ",\n"
+       << "  \"delete_range_p999_us\": " << del_p999 << ",\n"
+       << "  \"delete_range_max_us\": " << del_max << ",\n"
+       << "  \"latencies\": {\n"
+       << "    \"phase_a\": {\n"
+       << "      \"get\": {\"p50\": " << get_phase_q[0].p50 << ", \"p95\": " << get_phase_q[0].p95 << ", \"p99\": " << get_phase_q[0].p99 << ", \"p999\": " << get_phase_q[0].p999 << ", \"max\": " << get_phase_q[0].max << ", \"count\": " << get_phase_q[0].count << "},\n"
+       << "      \"put\": {\"p50\": " << put_phase_q[0].p50 << ", \"p95\": " << put_phase_q[0].p95 << ", \"p99\": " << put_phase_q[0].p99 << ", \"p999\": " << put_phase_q[0].p999 << ", \"max\": " << put_phase_q[0].max << ", \"count\": " << put_phase_q[0].count << "}\n"
+       << "    },\n"
+       << "    \"phase_b\": {\n"
+       << "      \"get\": {\"p50\": " << get_phase_q[1].p50 << ", \"p95\": " << get_phase_q[1].p95 << ", \"p99\": " << get_phase_q[1].p99 << ", \"p999\": " << get_phase_q[1].p999 << ", \"max\": " << get_phase_q[1].max << ", \"count\": " << get_phase_q[1].count << "},\n"
+       << "      \"put\": {\"p50\": " << put_phase_q[1].p50 << ", \"p95\": " << put_phase_q[1].p95 << ", \"p99\": " << put_phase_q[1].p99 << ", \"p999\": " << put_phase_q[1].p999 << ", \"max\": " << put_phase_q[1].max << ", \"count\": " << put_phase_q[1].count << "},\n"
+       << "      \"del\": {\"p50\": " << del_phase_q[1].p50 << ", \"p95\": " << del_phase_q[1].p95 << ", \"p99\": " << del_phase_q[1].p99 << ", \"p999\": " << del_phase_q[1].p999 << ", \"max\": " << del_phase_q[1].max << ", \"count\": " << del_phase_q[1].count << "}\n"
+       << "    },\n"
+       << "    \"phase_c\": {\n"
+       << "      \"get\": {\"p50\": " << get_phase_q[2].p50 << ", \"p95\": " << get_phase_q[2].p95 << ", \"p99\": " << get_phase_q[2].p99 << ", \"p999\": " << get_phase_q[2].p999 << ", \"max\": " << get_phase_q[2].max << ", \"count\": " << get_phase_q[2].count << "},\n"
+       << "      \"put\": {\"p50\": " << put_phase_q[2].p50 << ", \"p95\": " << put_phase_q[2].p95 << ", \"p99\": " << put_phase_q[2].p99 << ", \"p999\": " << put_phase_q[2].p999 << ", \"max\": " << put_phase_q[2].max << ", \"count\": " << put_phase_q[2].count << "}\n"
+       << "    },\n"
+       << "    \"overall\": {\n"
+       << "      \"get\": {\"p50\": " << get_overall_q.p50 << ", \"p95\": " << get_overall_q.p95 << ", \"p99\": " << get_overall_q.p99 << ", \"p999\": " << get_overall_q.p999 << ", \"max\": " << get_overall_q.max << ", \"count\": " << get_overall_q.count << "},\n"
+       << "      \"put\": {\"p50\": " << put_overall_q.p50 << ", \"p95\": " << put_overall_q.p95 << ", \"p99\": " << put_overall_q.p99 << ", \"p999\": " << put_overall_q.p999 << ", \"max\": " << put_overall_q.max << ", \"count\": " << put_overall_q.count << "},\n"
+       << "      \"del\": {\"p50\": " << del_overall_q.p50 << ", \"p95\": " << del_overall_q.p95 << ", \"p99\": " << del_overall_q.p99 << ", \"p999\": " << del_overall_q.p999 << ", \"max\": " << del_overall_q.max << ", \"count\": " << del_overall_q.count << "}\n"
+       << "    }\n"
+       << "  },\n"
        << "  \"get_post_fallback_p50_us\": " << post_fallback_p50 << ",\n"
        << "  \"get_post_fallback_p95_us\": " << post_fallback_p95 << ",\n"
        << "  \"get_post_fallback_p99_us\": " << post_fallback_p99 << ",\n"
        << "  \"get_post_fallback_p999_us\": " << post_fallback_p999 << ",\n"
        << "  \"get_post_fallback_max_us\": " << post_fallback_max << ",\n"
        << "  \"get_post_fallback_count\": " << post_fallback_count << ",\n"
-       << "  \"put_p95_us\": " << put_p95 << ",\n"
-       << "  \"put_p99_us\": " << put_p99 << ",\n"
-       << "  \"put_p999_us\": " << put_p999 << ",\n"
-       << "  \"put_max_us\": " << put_max << ",\n"
-       << "  \"delete_range_p95_us\": " << del_p95 << ",\n"
-       << "  \"delete_range_p99_us\": " << del_p99 << ",\n"
-       << "  \"delete_range_p999_us\": " << del_p999 << ",\n"
-       << "  \"delete_range_max_us\": " << del_max << ",\n"
        << "  \"fg_capacity_flushes\": " << fg_capacity_flushes << ",\n"
        << "  \"fg_threshold_flushes\": " << fg_threshold_flushes << ",\n"
        << "  \"fg_flush_bytes\": " << fg_flush_bytes << ",\n"
        << "  \"fg_compaction_read_bytes\": " << fg_compaction_read_bytes << ",\n"
        << "  \"fg_compaction_write_bytes\": " << fg_compaction_write_bytes << ",\n"
-       << "  \"engine_output_wa\": " << engine_output_wa << ",\n"
-       << "  \"engine_output_wa_description\": \"前台及观察窗口内 Flush/Compaction 引擎输出写放大为 0 (不含 WAL、AMTV 内存重建和设备层写放大)\",\n"
        << "  \"l0_files_peak\": " << l0_files_peak << ",\n"
        << "  \"pending_compaction_bytes\": " << pending_compaction_bytes << ",\n"
        << "  \"user_cpu_sec\": " << user_cpu_sec << ",\n"
@@ -1419,86 +1703,86 @@ int main(int argc, char** argv) {
        << "  \"peak_rss_kb\": " << peak_rss_kb << ",\n"
        << "  \"drain_converged\": " << (drain_converged ? "true" : "false") << ",\n"
        << "  \"drain_elapsed_sec\": " << drain_elapsed_sec << ",\n"
-       << "  \"phase_b_end_to_merge_stable_us\": " << phase_b_end_to_merge_stable_us << ",\n"
-       << "  \"foreground_end_to_merge_stable_us\": " << foreground_end_to_merge_stable_us << ",\n"
-       << "  \"last_merge_publish_timestamp_us\": " << last_merge_publish_timestamp_us << ",\n"
-       << "  \"phase_b_end_task_state\": " << phase_b_end_task_state << ",\n"
-       << "  \"phase_b_end_diagnostic_phase\": " << phase_b_end_diagnostic_phase << ",\n"
-       << "  \"phase_b_end_merges_computed_after\": " << phase_b_end_merges_computed_after << ",\n"
-       << "  \"phase_b_end_merges_published_after\": " << phase_b_end_merges_published_after << ",\n"
-       << "  \"phase_b_end_merges_publishing_only\": " << phase_b_end_merges_publishing_only << ",\n"
-       << "  \"peak_signed_backlog\": " << peak_signed_backlog << ",\n"
-       << "  \"peak_backlog_excess\": " << peak_backlog_excess << ",\n"
-       << "  \"peak_actual_sealed_runs\": " << peak_actual_sealed_runs << ",\n"
-       << "  \"backlog_excess_max_duration_us\": " << backlog_excess_max_duration_us << ",\n"
-       << "  \"peak_claimed_input_runs\": " << peak_claimed_input_runs << ",\n"
-       << "  \"peak_scheduling_backlog\": " << peak_scheduling_backlog << ",\n"
+       << "  \"phase_b_end_to_merge_stable_us\": " << amtv_num(phase_b_end_to_merge_stable_us) << ",\n"
+       << "  \"foreground_end_to_merge_stable_us\": " << amtv_num(foreground_end_to_merge_stable_us) << ",\n"
+       << "  \"last_merge_publish_timestamp_us\": " << amtv_num(last_merge_publish_timestamp_us) << ",\n"
+       << "  \"phase_b_end_task_state\": " << amtv_num(phase_b_end_task_state) << ",\n"
+       << "  \"phase_b_end_diagnostic_phase\": " << amtv_num(phase_b_end_diagnostic_phase) << ",\n"
+       << "  \"phase_b_end_merges_computed_after\": " << amtv_num(phase_b_end_merges_computed_after) << ",\n"
+       << "  \"phase_b_end_merges_published_after\": " << amtv_num(phase_b_end_merges_published_after) << ",\n"
+       << "  \"phase_b_end_merges_publishing_only\": " << amtv_num(phase_b_end_merges_publishing_only) << ",\n"
+       << "  \"peak_signed_backlog\": " << amtv_num(peak_signed_backlog) << ",\n"
+       << "  \"peak_backlog_excess\": " << amtv_num(peak_backlog_excess) << ",\n"
+       << "  \"peak_actual_sealed_runs\": " << amtv_num(peak_actual_sealed_runs) << ",\n"
+       << "  \"backlog_excess_max_duration_us\": " << amtv_num(backlog_excess_max_duration_us) << ",\n"
+       << "  \"peak_claimed_input_runs\": " << amtv_num(peak_claimed_input_runs) << ",\n"
+       << "  \"peak_scheduling_backlog\": " << amtv_num(peak_scheduling_backlog) << ",\n"
        << "  \"db_sha256\": \"" << db_sha256 << "\",\n"
        << "  \"expected_model_sha\": \"" << expected_model_sha << "\",\n"
-       << "  \"chunk_interval_min_us\": " << chunk_interval_min_us << ",\n"
-       << "  \"chunk_interval_p50_us\": " << chunk_interval_p50_us << ",\n"
-       << "  \"chunk_interval_p95_us\": " << chunk_interval_p95_us << ",\n"
-       << "  \"chunk_interval_max_us\": " << chunk_interval_max_us << ",\n"
-       << "  \"phase_b_del_range_arrival_rate_ops_per_sec\": " << phase_b_del_range_arrival_rate << ",\n"
-       << "  \"phase_b_del_range_chunk_arrival_rate_chunks_per_sec\": " << phase_b_chunk_arrival_rate << ",\n"
-       << "  \"phase_b_end_sealed_runs\": " << phase_b_end_sealed_runs << ",\n"
-       << "  \"phase_b_end_open_delta_len\": " << phase_b_end_open_delta_len << ",\n"
-       << "  \"phase_b_end_level_hist\": \"" << phase_b_end_level_hist << "\",\n"
-       << "  \"phase_b_end_mergeable_pairs_exist\": " << (phase_b_end_mergeable_pairs_exist ? "true" : "false") << ",\n"
-       << "  \"drained_sealed_runs\": " << drained_sealed_runs << ",\n"
-       << "  \"drained_open_delta_len\": " << drained_open_delta_len << ",\n"
-       << "  \"drained_level_hist\": \"" << drained_level_hist << "\",\n"
-       << "  \"theoretical_distribution_matched\": " << (theoretical_distribution_matched ? "true" : "false") << ",\n"
-       << "  \"max_single_merge_wall_time_us\": " << max_single_merge_wall_time_us << ",\n"
-       << "  \"max_single_merge_cpu_time_us\": " << max_single_merge_cpu_time_us << ",\n"
-       << "  \"max_single_merge_level\": " << max_single_merge_level << ",\n"
-       << "  \"max_computed_merge_wall_us\": " << max_computed_merge_wall_us << ",\n"
-       << "  \"max_computed_merge_cpu_us\": " << max_computed_merge_cpu_us << ",\n"
-       << "  \"max_computed_merge_level\": " << max_computed_merge_level << ",\n"
-       << "  \"max_published_merge_wall_us\": " << max_published_merge_wall_us << ",\n"
-       << "  \"max_published_merge_cpu_us\": " << max_published_merge_cpu_us << ",\n"
-       << "  \"max_published_merge_level\": " << max_published_merge_level << ",\n"
-       << "  \"total_computed_merge_wall_us\": " << total_computed_merge_wall_us << ",\n"
-       << "  \"total_computed_merge_cpu_us\": " << total_computed_merge_cpu_us << ",\n"
-       << "  \"total_published_merge_wall_us\": " << total_published_merge_wall_us << ",\n"
-       << "  \"total_published_merge_cpu_us\": " << total_published_merge_cpu_us << ",\n"
-       << "  \"raw_entry_payload_bytes_peak\": " << raw_entry_payload_bytes_peak << ",\n"
-       << "  \"raw_entry_capacity_proxy_bytes_peak\": " << raw_entry_capacity_proxy_bytes_peak << ",\n"
-       << "  \"fragment_payload_proxy_bytes_peak\": " << fragment_payload_proxy_bytes_peak << ",\n"
-       << "  \"inflight_payload_proxy_bytes_peak\": " << inflight_payload_proxy_bytes_peak << ",\n"
-       << "  \"merge_count_per_level\": " << map_to_json(merge_count_per_lvl) << ",\n"
-       << "  \"merge_input_tombstones_per_level\": " << map_to_json(merge_tombstones_per_lvl) << ",\n"
-       << "  \"merge_wall_time_us_per_level\": " << map_to_json(merge_wall_us_per_lvl) << ",\n"
-       << "  \"merge_cpu_time_us_per_level\": " << map_to_json(merge_cpu_us_per_lvl) << ",\n"
-       << "  \"merge_queue_wait_us_per_level\": " << map_to_json(merge_wait_us_per_lvl) << ",\n"
-       << "  \"backlog_regression_slope\": " << backlog_regression_slope << ",\n"
-       << "  \"get_probe_avg_sealed_runs\": " << get_probe_avg_sealed_runs << ",\n"
-       << "  \"get_probe_p50_sealed_runs\": " << get_probe_p50_sealed_runs << ",\n"
-       << "  \"get_probe_p90_sealed_runs\": " << get_probe_p90_sealed_runs << ",\n"
-       << "  \"get_probe_p99_sealed_runs\": " << get_probe_p99_sealed_runs << ",\n"
-       << "  \"get_probe_max_sealed_runs\": " << get_probe_max_sealed_runs << ",\n"
-       << "  \"get_probe_avg_open_delta\": " << get_probe_avg_open_delta << ",\n"
-       << "  \"get_probe_max_open_delta\": " << get_probe_max_open_delta << ",\n"
-       << "  \"amtv_merge_completed\": " << amtv_merge_completed << ",\n"
-       << "  \"amtv_merge_requested\": " << amtv_merge_requested << ",\n"
-       << "  \"amtv_merge_computed\": " << amtv_merge_computed << ",\n"
-       << "  \"amtv_merge_published\": " << amtv_merge_published << ",\n"
-       << "  \"amtv_merge_discarded\": " << amtv_merge_discarded << ",\n"
-       << "  \"amtv_merge_input_runs\": " << amtv_merge_input_runs << ",\n"
-       << "  \"amtv_merge_input_tombstones\": " << amtv_merge_input_tombstones << ",\n"
-       << "  \"amtv_reconstruction_amplification\": " << (options.enable_amtv ? (double)amtv_merge_input_tombstones / 20000.0 : 0.0) << ",\n"
-       << "  \"amtv_fallback_events\": " << amtv_fallback_events << ",\n"
-       << "  \"amtv_fallback_gets\": " << amtv_fallback_gets << ",\n"
-       << "  \"runs_at_fallback\": " << amtv_runs_at_fallback << ",\n"
-       << "  \"tombstones_at_fallback\": " << amtv_tombstones_at_fallback << ",\n"
-       << "  \"amtv_merge_wall_time_us\": " << amtv_merge_wall_time_us << ",\n"
-       << "  \"amtv_merge_cpu_time_us\": " << amtv_merge_cpu_time_us << ",\n"
-       << "  \"amtv_task_queue_wait_time_us\": " << amtv_task_queue_wait_time_us << ",\n"
-       << "  \"amtv_raw_entries_struct_bytes_peak\": " << amtv_raw_entries_struct_bytes_peak << ",\n"
-       << "  \"amtv_in_flight_merge_struct_bytes_peak\": " << amtv_in_flight_merge_struct_bytes_peak << ",\n"
-       << "  \"amtv_open_delta_len\": " << amtv_open_delta_len << ",\n"
-       << "  \"amtv_sealed_runs\": " << amtv_sealed_runs << ",\n"
-       << "  \"amtv_level_hist\": \"" << amtv_level_hist << "\",\n"
+       << "  \"chunk_interval_min_us\": " << amtv_num(chunk_interval_min_us) << ",\n"
+       << "  \"chunk_interval_p50_us\": " << amtv_num(chunk_interval_p50_us) << ",\n"
+       << "  \"chunk_interval_p95_us\": " << amtv_num(chunk_interval_p95_us) << ",\n"
+       << "  \"chunk_interval_max_us\": " << amtv_num(chunk_interval_max_us) << ",\n"
+       << "  \"phase_b_del_range_arrival_rate_ops_per_sec\": " << amtv_num(phase_b_del_range_arrival_rate) << ",\n"
+       << "  \"phase_b_del_range_chunk_arrival_rate_chunks_per_sec\": " << amtv_num(phase_b_chunk_arrival_rate) << ",\n"
+       << "  \"phase_b_end_sealed_runs\": " << amtv_num(phase_b_end_sealed_runs) << ",\n"
+       << "  \"phase_b_end_open_delta_len\": " << amtv_num(phase_b_end_open_delta_len) << ",\n"
+       << "  \"phase_b_end_level_hist\": " << amtv_str(phase_b_end_level_hist) << ",\n"
+       << "  \"phase_b_end_mergeable_pairs_exist\": " << amtv_bool(phase_b_end_mergeable_pairs_exist) << ",\n"
+       << "  \"drained_sealed_runs\": " << amtv_num(drained_sealed_runs) << ",\n"
+       << "  \"drained_open_delta_len\": " << amtv_num(drained_open_delta_len) << ",\n"
+       << "  \"drained_level_hist\": " << amtv_str(drained_level_hist) << ",\n"
+       << "  \"theoretical_distribution_matched\": " << amtv_bool(theoretical_distribution_matched) << ",\n"
+       << "  \"max_single_merge_wall_time_us\": " << amtv_num(max_single_merge_wall_time_us) << ",\n"
+       << "  \"max_single_merge_cpu_time_us\": " << amtv_num(max_single_merge_cpu_time_us) << ",\n"
+       << "  \"max_single_merge_level\": " << amtv_num(max_single_merge_level) << ",\n"
+       << "  \"max_computed_merge_wall_us\": " << amtv_num(max_computed_merge_wall_us) << ",\n"
+       << "  \"max_computed_merge_cpu_us\": " << amtv_num(max_computed_merge_cpu_us) << ",\n"
+       << "  \"max_computed_merge_level\": " << amtv_num(max_computed_merge_level) << ",\n"
+       << "  \"max_published_merge_wall_us\": " << amtv_num(max_published_merge_wall_us) << ",\n"
+       << "  \"max_published_merge_cpu_us\": " << amtv_num(max_published_merge_cpu_us) << ",\n"
+       << "  \"max_published_merge_level\": " << amtv_num(max_published_merge_level) << ",\n"
+       << "  \"total_computed_merge_wall_us\": " << amtv_num(total_computed_merge_wall_us) << ",\n"
+       << "  \"total_computed_merge_cpu_us\": " << amtv_num(total_computed_merge_cpu_us) << ",\n"
+       << "  \"total_published_merge_wall_us\": " << amtv_num(total_published_merge_wall_us) << ",\n"
+       << "  \"total_published_merge_cpu_us\": " << amtv_num(total_published_merge_cpu_us) << ",\n"
+       << "  \"raw_entry_payload_bytes_peak\": " << amtv_num(raw_entry_payload_bytes_peak) << ",\n"
+       << "  \"raw_entry_capacity_proxy_bytes_peak\": " << amtv_num(raw_entry_capacity_proxy_bytes_peak) << ",\n"
+       << "  \"fragment_payload_proxy_bytes_peak\": " << amtv_num(fragment_payload_proxy_bytes_peak) << ",\n"
+       << "  \"inflight_payload_proxy_bytes_peak\": " << amtv_num(inflight_payload_proxy_bytes_peak) << ",\n"
+       << "  \"merge_count_per_level\": " << amtv_map(merge_count_per_lvl) << ",\n"
+       << "  \"merge_input_tombstones_per_level\": " << amtv_map(merge_tombstones_per_lvl) << ",\n"
+       << "  \"merge_wall_time_us_per_level\": " << amtv_map(merge_wall_us_per_lvl) << ",\n"
+       << "  \"merge_cpu_time_us_per_level\": " << amtv_map(merge_cpu_us_per_lvl) << ",\n"
+       << "  \"merge_queue_wait_us_per_level\": " << amtv_map(merge_wait_us_per_lvl) << ",\n"
+       << "  \"backlog_regression_slope\": " << amtv_num(backlog_regression_slope) << ",\n"
+       << "  \"get_probe_avg_sealed_runs\": " << amtv_num(get_probe_avg_sealed_runs) << ",\n"
+       << "  \"get_probe_p50_sealed_runs\": " << amtv_num(get_probe_p50_sealed_runs) << ",\n"
+       << "  \"get_probe_p90_sealed_runs\": " << amtv_num(get_probe_p90_sealed_runs) << ",\n"
+       << "  \"get_probe_p99_sealed_runs\": " << amtv_num(get_probe_p99_sealed_runs) << ",\n"
+       << "  \"get_probe_max_sealed_runs\": " << amtv_num(get_probe_max_sealed_runs) << ",\n"
+       << "  \"get_probe_avg_open_delta\": " << amtv_num(get_probe_avg_open_delta) << ",\n"
+       << "  \"get_probe_max_open_delta\": " << amtv_num(get_probe_max_open_delta) << ",\n"
+       << "  \"amtv_merge_completed\": " << amtv_num(amtv_merge_completed) << ",\n"
+       << "  \"amtv_merge_requested\": " << amtv_num(amtv_merge_requested) << ",\n"
+       << "  \"amtv_merge_computed\": " << amtv_num(amtv_merge_computed) << ",\n"
+       << "  \"amtv_merge_published\": " << amtv_num(amtv_merge_published) << ",\n"
+       << "  \"amtv_merge_discarded\": " << amtv_num(amtv_merge_discarded) << ",\n"
+       << "  \"amtv_merge_input_runs\": " << amtv_num(amtv_merge_input_runs) << ",\n"
+       << "  \"amtv_merge_input_tombstones\": " << amtv_num(amtv_merge_input_tombstones) << ",\n"
+       << "  \"amtv_reconstruction_amplification\": " << (options.enable_amtv ? std::to_string((double)amtv_merge_input_tombstones / 20000.0) : "\"N/A\"") << ",\n"
+       << "  \"amtv_fallback_events\": " << amtv_num(amtv_fallback_events) << ",\n"
+       << "  \"amtv_fallback_gets\": " << amtv_num(amtv_fallback_gets) << ",\n"
+       << "  \"runs_at_fallback\": " << amtv_num(amtv_runs_at_fallback) << ",\n"
+       << "  \"tombstones_at_fallback\": " << amtv_num(amtv_tombstones_at_fallback) << ",\n"
+       << "  \"amtv_merge_wall_time_us\": " << amtv_num(amtv_merge_wall_time_us) << ",\n"
+       << "  \"amtv_merge_cpu_time_us\": " << amtv_num(amtv_merge_cpu_time_us) << ",\n"
+       << "  \"amtv_task_queue_wait_time_us\": " << amtv_num(amtv_task_queue_wait_time_us) << ",\n"
+       << "  \"amtv_raw_entries_struct_bytes_peak\": " << amtv_num(amtv_raw_entries_struct_bytes_peak) << ",\n"
+       << "  \"amtv_in_flight_merge_struct_bytes_peak\": " << amtv_num(amtv_in_flight_merge_struct_bytes_peak) << ",\n"
+       << "  \"amtv_open_delta_len\": " << amtv_num(amtv_open_delta_len) << ",\n"
+       << "  \"amtv_sealed_runs\": " << amtv_num(amtv_sealed_runs) << ",\n"
+       << "  \"amtv_level_hist\": " << amtv_str(amtv_level_hist) << ",\n"
        << "  \"audit_mat_count\": " << audit_mat_count << ",\n"
        << "  \"audit_mat_nanos\": " << audit_mat_nanos << ",\n"
        << "  \"audit_cache_inv_count\": " << audit_cache_inv_count << ",\n"
@@ -1559,8 +1843,6 @@ int main(int argc, char** argv) {
        << "  }\n"
        << "}\n";
     jf.close();
-
-    db.reset();
 
     std::cout << "\n======================================================================\n";
     std::cout << "AMTV M2d Run " << cfg.exp_id << " COMPLETED SUCCESSFULLY!\n";

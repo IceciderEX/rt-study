@@ -21,7 +21,8 @@ enum class EventStage : uint8_t {
     kPreload = 0,
     kForeground = 1,
     kCooldown = 2,
-    kVerification = 3
+    kDrain = 3,
+    kVerification = 4
 };
 
 struct RawFlushEvent {
@@ -53,6 +54,7 @@ public:
           init_time_(std::chrono::steady_clock::now()),
           exp_start_time_(init_time_),
           cooldown_start_time_(init_time_),
+          drain_start_time_(init_time_),
           verification_start_time_(init_time_),
           fg_flush_bytes_(0), 
           fg_compaction_read_bytes_(0), 
@@ -60,9 +62,15 @@ public:
           cooldown_flush_bytes_(0),
           cooldown_compaction_read_bytes_(0),
           cooldown_compaction_write_bytes_(0),
+          drain_flush_bytes_(0),
+          drain_compaction_read_bytes_(0),
+          drain_compaction_write_bytes_(0),
           ver_flush_bytes_(0),
           ver_compaction_read_bytes_(0),
-          ver_compaction_write_bytes_(0)
+          ver_compaction_write_bytes_(0),
+          total_completed_flush_bytes_(0),
+          total_completed_compaction_read_bytes_(0),
+          total_completed_compaction_write_bytes_(0)
     {
         events_flush_.reserve(2048);
         events_compaction_.reserve(2048);
@@ -88,7 +96,14 @@ public:
         cooldown_start_time_ = std::chrono::steady_clock::now();
     }
 
-    // 3. Called when strict 10s cooldown expires, before starting full KV verification
+    // 3. Called when strict 10s cooldown expires, to begin Drain-to-stable window
+    void StartDrainStage() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_stage_ = EventStage::kDrain;
+        drain_start_time_ = std::chrono::steady_clock::now();
+    }
+
+    // 4. Called when Drain converges, before starting full KV verification
     void StartVerificationStage() {
         std::lock_guard<std::mutex> lock(mutex_);
         current_stage_ = EventStage::kVerification;
@@ -154,10 +169,14 @@ public:
             } else if (current_stage_ == EventStage::kCooldown) {
                 elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
                 cooldown_flush_bytes_ += out_bytes;
+            } else if (current_stage_ == EventStage::kDrain) {
+                elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
+                drain_flush_bytes_ += out_bytes;
             } else { // kVerification
                 elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
                 ver_flush_bytes_ += out_bytes;
             }
+            total_completed_flush_bytes_ += out_bytes;
 
             RawFlushEvent rec;
             rec.job_id = info.job_id;
@@ -195,11 +214,17 @@ public:
             elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
             cooldown_compaction_read_bytes_ += info.stats.total_input_bytes;
             cooldown_compaction_write_bytes_ += info.stats.total_output_bytes;
+        } else if (current_stage_ == EventStage::kDrain) {
+            elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
+            drain_compaction_read_bytes_ += info.stats.total_input_bytes;
+            drain_compaction_write_bytes_ += info.stats.total_output_bytes;
         } else { // kVerification
             elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - exp_start_time_).count();
             ver_compaction_read_bytes_ += info.stats.total_input_bytes;
             ver_compaction_write_bytes_ += info.stats.total_output_bytes;
         }
+        total_completed_compaction_read_bytes_ += info.stats.total_input_bytes;
+        total_completed_compaction_write_bytes_ += info.stats.total_output_bytes;
 
         RawCompactionEvent rec;
         rec.job_id = info.job_id;
@@ -289,6 +314,31 @@ public:
         return fg_compaction_read_bytes_ + cooldown_compaction_read_bytes_;
     }
 
+    uint64_t GetTotalCumulativeFlushBytes() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return total_completed_flush_bytes_;
+    }
+
+    uint64_t GetTotalCumulativeCompactionWriteBytes() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return total_completed_compaction_write_bytes_;
+    }
+
+    uint64_t GetTotalCumulativeCompactionReadBytes() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return total_completed_compaction_read_bytes_;
+    }
+
+    std::vector<RawFlushEvent> GetFlushEvents() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return events_flush_;
+    }
+
+    std::vector<RawCompactionEvent> GetCompactionEvents() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return events_compaction_;
+    }
+
     // Offline post-run CSV export
     void DumpEventsCsv(const std::string& csv_path, const std::string& exp_id) const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -310,6 +360,7 @@ public:
                 case EventStage::kPreload: return "PRELOAD";
                 case EventStage::kForeground: return "FOREGROUND";
                 case EventStage::kCooldown: return "COOLDOWN";
+                case EventStage::kDrain: return "DRAIN";
                 case EventStage::kVerification: return "VERIFICATION";
                 default: return "UNKNOWN";
             }
@@ -351,6 +402,7 @@ private:
     std::chrono::steady_clock::time_point init_time_;
     std::chrono::steady_clock::time_point exp_start_time_;
     std::chrono::steady_clock::time_point cooldown_start_time_;
+    std::chrono::steady_clock::time_point drain_start_time_;
     std::chrono::steady_clock::time_point verification_start_time_;
 
     std::vector<RawFlushEvent> events_flush_;
@@ -364,9 +416,17 @@ private:
     uint64_t cooldown_compaction_read_bytes_;
     uint64_t cooldown_compaction_write_bytes_;
 
+    uint64_t drain_flush_bytes_;
+    uint64_t drain_compaction_read_bytes_;
+    uint64_t drain_compaction_write_bytes_;
+
     uint64_t ver_flush_bytes_;
     uint64_t ver_compaction_read_bytes_;
     uint64_t ver_compaction_write_bytes_;
+
+    uint64_t total_completed_flush_bytes_ = 0;
+    uint64_t total_completed_compaction_read_bytes_ = 0;
+    uint64_t total_completed_compaction_write_bytes_ = 0;
 
     uint64_t sealed_memtable_count_ = 0;
 

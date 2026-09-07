@@ -56,7 +56,7 @@ This report presents the complete results of the formal **M2d Mechanism Audit $N
 
 ### Table 3: Native Read-Path Audit Metrics (Materialization & Contention, $N=3$)
 
-| Config | Materialization Count | Materialization Time (s) | Cache Invalidations | RangeDel Lock Attempts | Lock Contended Count (Rate) | Lock Wait Time (s) |
+| Config | Materialization Count | 累计线程侧物化计时 (s) | Cache Invalidations | RangeDel Lock Attempts | Lock Contended Count (Rate) | 累计线程等待时间 (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Native-T0** | $17,282.7 \pm 174.4$ | $157.27 \pm 6.06$ s | $20,000$ | $46,970.7$ | **$29,688.0$ ($63.2\%$)** | **$198.20 \pm 11.14$ s** |
 | **Native-T512** | $15,566.7 \pm 195.0$ | $2.99 \pm 0.12$ s | $20,000$ | $43,366.7$ | $27,795.3$ ($64.1\%$) | $4.78 \pm 0.26$ s |
@@ -101,9 +101,9 @@ This report presents the complete results of the formal **M2d Mechanism Audit $N
 | **Merge CPU Time ($\mu\text{s}$)** | $349,295.0 \pm 38,071.4$ | $1,574.0 \pm 66.0$ | Total CPU time across background threads |
 | **Merge Wall Time ($\mu\text{s}$)** | $352,034.7 \pm 38,247.1$ | $1,581.0 \pm 64.7$ | Total wall clock time spent in merge |
 | **Input Tombstones Merged** | $146,944.0 \pm 0.0$ | $640.0 \pm 0.0$ | Cumulative input tombstones to merges |
-| **Reconstruction Amplification** | **$7.35\text{x} \pm 0.00\text{x}$** | $0.03\text{x} \pm 0.00\text{x}$ | Ratio of merged tombstones to raw ($20,000$) |
+| **Reconstruction Amplification** | **$7.35\text{x} \pm 0.00\text{x}$** | $0.03\text{x} \pm 0.00\text{x}$ | AMTV内部Run重构输入放大，符合当前B=64二叉归并日程 |
 | **Peak Signed Backlog** | $19.0 \pm 1.0$ runs | $3.0 \pm 0.0$ runs | Maximum excess runs above steady-state |
-| **Peak Struct Memory (Raw Entries)** | $1,437,696$ B ($1.37$ MB) | $32,256$ B ($31.5$ KB) | Peak `AMTVRawEntry` structures |
+| **Peak Struct Memory (Raw Entries)** | $1,437,696$ B ($1.37$ MB) | $32,256$ B ($31.5$ KB) | 结构/payload内存代理值 |
 | **Peak Struct Memory (In-Flight)** | $1,179,648$ B ($1.12$ MB) | $18,432$ B ($18.0$ KB) | Peak in-flight merge buffer memory |
 
 ---
@@ -144,17 +144,18 @@ This report presents the complete results of the formal **M2d Mechanism Audit $N
 **Evidence**:
 - In `Native-T0`, 20,000 DeleteRanges arrive concurrently with 50,000 GetLive point reads. Every single DeleteRange invalidates the cached range tombstone block (`audit_cache_inv_count = 20,000`).
 - Because the cache is continually invalidated, incoming GetLive operations trigger `MemTable::GetRangeTombstoneList()`, which materializes the entire tombstone collection under the MemTable's internal range deletion mutex (`range_del_mutex_`).
-- Across the 8 concurrent worker threads, this resulted in **$17,282.7$ materialization events**, consuming **$157.27$ seconds of CPU time** in materialization routines.
-- Critically, the lock contention rate was **$63.2\%$** ($29,688$ out of $46,971$ attempts collided), causing workers to accumulate **$198.20$ seconds of lock wait time**. Phase B elapsed time collapsed to **$47.88$ seconds** ($6,217$ IOPS).
-- In `AMTV-T0`, point reads bypass the native materializer entirely (`audit_mat_count = 0`, `audit_lock_attempt_count = 0`). GetLive operations query the active MemTable's immutable sealed runs and thread-safe Open Delta. Even though 20,000 cache invalidations still occurred on the native pointer, the point read path never attempted to materialize it. Phase B completed in **$0.830$ seconds** at **$267,758$ IOPS**—a **$57.7\text{x}$ throughput advantage**.
+- Across the 8 concurrent worker threads, this resulted in **$17,282.7$ materialization events**, consuming **$157.27$ seconds of 线程侧物化计时** in materialization routines.
+- Critically, the lock contention rate was **$63.2\%$** ($29,688$ out of $46,971$ attempts collided), causing workers to accumulate **$198.20$ seconds of 累计线程等待时间**. Phase B elapsed time collapsed to **$47.88$ seconds**.
+- In `AMTV-T0`, point reads bypass the native materializer entirely (`audit_mat_count = 0`, `audit_lock_attempt_count = 0`). GetLive operations query the active MemTable's immutable sealed runs and thread-safe Open Delta. Even though 20,000 cache invalidations still occurred on the native pointer, the point read path never attempted to materialize it.
+- **Throughput & Duration Comparison Dissection**:
+  - **Phase B Performance**: AMTV-T0 completed 100,000 ops in $0.830$ s, achieving approximately **$120\text{k}$ IOPS** (vs Native-T0's $47.88$ s, yielding $\sim 2.1\text{k}$ IOPS). The Phase B duration ratio is **$57.7\text{x}$** ($47.88\text{ s} / 0.830\text{ s}$).
+  - **Overall Performance**: AMTV-T0 finished all 300,000 ops across all three phases in $1.1205$ s of foreground wall-clock time, achieving approximately **$267\text{k}$ IOPS** (vs Native-T0's $6,217$ IOPS). The overall throughput advantage is approximately **$43\text{x}$**.
 
 ### Question 2: Why does Native-T0 immediately recover in Phase C?
 **Evidence**:
-- In Phase C ("停止DeleteRange后的读主导观察期"), the workload performs 90,000 GetLive and 10,000 Put operations, but **0 DeleteRanges**.
-- With zero DeleteRanges arriving, cache invalidations immediately cease (`audit_cache_inv_count = 0` in Phase C).
-- Consequently, the first worker thread that executes a GetLive materializes the 20,000-tombstone list **once**, stores the pointer in the cached block, and releases the mutex.
-- All subsequent $89,999$ GetLive operations throughout Phase C find the cached pointer valid, bypassing materialization and lock acquisition. Phase C completed in **$0.229$ seconds**, completely restoring read performance.
-- This proves that Native-T0's pathology is not caused by the static presence of 20,000 range tombstones, but by the **dynamic interleaved arrival of range deletions that repeatedly invalidates the native cache**.
+- In Phase C (“停止DeleteRange后的读主导观察期”), the workload performs 90,000 GetLive and 10,000 Put operations, but **0 DeleteRanges**.
+- **View Reuse Mechanism**: 停止DeleteRange后，缓存不再持续失效（Phase C 期间 `audit_cache_inv_count = 0`）。首次点查将 20,000 条墓碑物化后长效缓存在指针中，后续 90,000 次点查直接复用既有物化视图，彻底消除了重复物化与锁等待。Phase C 耗时从 Phase B 的 47.9 秒暴跌至 0.229 秒。
+- **Scope Clarification**: 这并不意味着 20,000 条静态墓碑在内存中“毫无代价”（每个 GetLive 仍需在该既有视图上二分查找覆盖范围），但它证实了 Native-T0 的毁灭性性能病态源自**删除写入引起的动态交织缓存失效与重建物化锁争用**，而非静态墓碑存在本身。
 
 ### Question 3: What is the detailed breakdown of foreground AddTombstone overhead in AMTV?
 **Evidence**:
@@ -169,9 +170,12 @@ This report presents the complete results of the formal **M2d Mechanism Audit $N
 
 ### Question 4: How does AMTV achieve log2 probing efficiency without triggering fallback?
 **Evidence**:
-- In `AMTV-T0`, during the peak injection phase, the average probed sealed run count was **$4.649$ runs** ($4$ to $5$ binary searches), and the average Open Delta length probed was **$31.83$ entries** (linear scan of $\le 64$ items).
-- The maximum probed run count across all $220,000$ GetLive operations was **$22.7$ runs**, occurring during brief merge scheduling bursts.
-- Because the hard layer limit was set to $H=32$, the system operated with **$\ge 9.3$ layers of safety margin**.
+- **Probing Depth Statistics**:
+  - **4.65 runs** 为全量 Get 操作在所有轮次中的平均探查 sealed Run 数量；
+  - **22.7 runs** 为三轮测试中各自观察到的最大探查 Run 数的均值（$(22 + 22 + 24) / 3 = 22.67$）；
+  - **各轮整数最大值**: 三个 Rep 的瞬时整数最大探查 Run 数分别为：**Rep 1 为 22，Rep 2 为 22，Rep 3 为 24**。
+  - Average Open Delta length probed was **$31.83$ entries** (linear scan of $\le 64$ items).
+- Because the hard layer limit was set to $H=32$, the system operated with **$\ge 8$ layers of absolute integer headroom** across all runs.
 - Crucially, across all 3 repetitions and $660,000$ point gets in AMTV-T0, **`amtv_fallback_events` was exactly 0** and **`amtv_fallback_gets` was exactly 0**.
 - In `AMTV-T512`, frequent MemTable flushes capped the sealed run count at $4$, resulting in an average probe depth of **$2.49$ runs** and zero fallbacks.
 
@@ -180,9 +184,9 @@ This report presents the complete results of the formal **M2d Mechanism Audit $N
 - Across 20,000 tombstones in AMTV-T0, exactly **$308$ merges were computed** and **$308$ merges were published**.
 - **$0$ merges were discarded** (`amtv_merge_discarded = 0`). Discarded merge CPU time was $0.00 \mu\text{s}$, proving that the single-lane lock-free priority queue scheduling accurately serialized pairwise runs without wasted computation.
 - Total background merge CPU time was **$349.3$ ms** ($0.35$ seconds of background core time), consuming negligible CPU on a 20-core NUMA node.
-- Total tombstones merged into new runs was $146,944$, giving an empirical reconstruction amplification of **$7.35\text{x}$**.
-- **Theoretical Alignment**: For $N = 20,000$ tombstones grouped into chunks of $B=64$, the number of chunks is $C = 312.5$. In an idealized power-of-two merge tree, the average number of times a chunk is merged is $\approx \log_2(C) = \log_2(312.5) \approx 8.28$. The measured $7.35\text{x}$ closely tracks this theoretical lower bound, confirming near-optimal hierarchical merge tree efficiency.
-- Structural memory overhead was bounded at **$1.37$ MB** peak for raw entries and **$1.12$ MB** for in-flight merge buffers.
+- Total tombstones merged into new runs was $146,944$, giving an empirical reconstruction amplification of **$7.35\text{x}$**（AMTV内部Run重构输入放大，符合当前B=64二叉归并日程）。
+- Structural memory overhead was bounded at **$1.37$ MB** 结构/payload内存代理值 peak for raw entries and **$1.12$ MB** for in-flight merge buffers.
+- **Snapshot Catalog Conservation Note**: 明确 Snapshot 目录守恒以同一 Snapshot 中的 sealed Run 与 Open Delta 条目总数为准（$\sum r.\text{count} + \text{open\_delta\_len} \equiv \text{total}$）；`delete_ranges_issued` 计数器是异步观测变量，不作为同一时刻的目录守恒值。
 
 ---
 

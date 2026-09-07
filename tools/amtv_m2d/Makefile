@@ -7,7 +7,7 @@ AUDIT_TARGET = $(STUDY_ROOT)/bin/m2d_driver_audit
 RELEASE_TARGET = $(STUDY_ROOT)/bin/m2d_driver_release
 SRCS = m2d_driver.cc
 
-COMMON_LIBS = -lssl -lcrypto -lpthread -lzstd -lsnappy -llz4 -lz -lbz2 -ldl
+COMMON_LIBS = -lssl -lcrypto -lpthread -lzstd -lsnappy -llz4 -lz -lbz2 -ldl -lnuma
 
 all: $(AUDIT_TARGET) $(RELEASE_TARGET)
 
@@ -19,7 +19,7 @@ $(AUDIT_TARGET): $(SRCS) $(AUDIT_ROOT)/librocksdb.a
 
 $(RELEASE_TARGET): $(SRCS) $(RELEASE_ROOT)/librocksdb.a
 	mkdir -p $(STUDY_ROOT)/bin
-	$(CXX) -O3 -DNDEBUG -std=c++20 -fno-rtti -DOS_LINUX -D_REENTRANT -DROCKSDB_PLATFORM_POSIX -Wall -Wextra \
+	$(CXX) -O3 -DNDEBUG -std=c++20 -fno-rtti -DOS_LINUX -D_REENTRANT -DROCKSDB_PLATFORM_POSIX -DROCKSDB_LIB_IO_POSIX -DROCKSDB_PTHREAD_ADAPTIVE_MUTEX -Wall -Wextra \
 		-I$(RELEASE_ROOT)/include -I$(RELEASE_ROOT) -I$(STUDY_ROOT) \
 		$(SRCS) $(RELEASE_ROOT)/librocksdb.a $(COMMON_LIBS) -o $(RELEASE_TARGET)
 
