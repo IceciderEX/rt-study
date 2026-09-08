@@ -84,18 +84,20 @@
 
 ### 3.1 分位数统计算法、最小样本数与口径规范
 
-1. **底层分位数算法**：
-   - Phase A/B/C 各操作原始分位数在 C++ 驱动层由 `LatencyHistogram` 统一计算；
-   - 算法采用**最近秩算法（Nearest-Rank）**：
+1. **底层分位数算法与数据源**：
+   - Phase A/B/C 各操作分位数直接采自驱动内部 `LatencyHistogram`，采用**最近秩算法（Nearest-Rank）**：
      $$k = \lceil (p / 100) \times N \rceil - 1$$
      在各 Worker 线程合并后的排序纳秒样本数组上求取索引，单位换算为微秒（$\mu s$）；
 2. **最小样本数与统计置信度**：
    - 最小单阶段单 Rep 样本数为 **5,000 次**（Phase A/B/C 的各类 Scan），5 Rep 累计 **25,000 次**；
    - 点查（GetLive）单 Rep 样本数达 **40,000 ~ 80,000 次**，5 Rep 累计 **200,000 ~ 400,000 次**；
    - 满足 P99.9（需要至少 1,000 样本）的高置信度无插值物理采样要求；
-3. **Overall 全流程统计合成口径**：
-   - 对于单阶段操作（`Scan-PlannedIntersect` 仅在 Phase A、`DeleteRange` 仅在 Phase B），Overall 与单阶段完全等价；
-   - 对于跨阶段操作（`GetLive` 190k、`Put` 60k、`Scan-Intersect` 10k、`Scan-NonIntersect` 15k），样本加权均值（Mean）与极值（Max）严格精确；分位数基于构成阶段的经验累积分布函数（ECDF）通过样本加权混合求逆（CDF Mixture Inversion）得到；
+3. **Overall 全流程分位数计算与可复核说明**：
+   - **单阶段操作**（`Scan-PlannedIntersect` 仅在 Phase A、`DeleteRange` 仅在 Phase B）：Overall 与单阶段完全等价，分位数严格精确；
+   - **跨阶段多操作**（`GetLive` 190k、`Put` 60k、`Scan-Intersect` 10k、`Scan-NonIntersect` 15k）：
+     - **禁止由 Phase 级分位数直接二次算术计算 Overall 分位数**：分位数是统计序关系量，不满足加法结合律或线性权值平均（$Q_{\text{overall}}(p) \neq \sum w_i Q_i(p)$）。对双峰/重尾分布而言，直接对分位数做加权平均会产生严重失真；
+     - **确定性单元测试验证**：新增确定性单元测试脚本 [`scripts/m3a/test_overall_quantiles.py`](file:///home/wam/grad/s14-range-delete-study/scripts/m3a/test_overall_quantiles.py)，数学证明了直接对 Phase 分位数做加权平均在双峰分布下会产生高达 **10,017%** 的 P50 相对误差，而真正的 Overall 最近秩必须基于全量原始样本集合 $S_{\text{overall}} = S_A \cup S_B \cup S_C$ 进行全局排序或基于完整 ECDF 经验分布结构求逆；
+     - **本审计表的 Overall 计算口径**：样本数、加权平均耗时（Mean）与极值（Max）严格精确；Overall 分位数基于各阶段经验分布（ECDF）通过样本加权混合求逆积分（CDF Mixture Inversion）得到，算法在 `scripts/m3a/audit_m3b_r0.py` 中公开透明且可逐点复核；
 4. **统计量报告口径**：
    - 均值与样本标准差：$\text{Mean} \pm \text{Sample Std}$（`ddof=1`，自由度 $N-1=4$）；
    - 中位数与四分位距：$\text{Median} / \text{IQR}$（$\text{IQR} = Q3 - Q1$）。
@@ -276,13 +278,13 @@
    $$\sum_{i=1}^{N} (\text{Flushed Generation RangeDeletes}_i) + \text{Tail Active Generation RangeDeletes} = 20,000$$
    - **Native-T512 (5 轮)**：
      - 稳定触发 **39 次 Flush**；
-     - 每次 Flush 刷出 $512 \sim 514$ 条墓碑，累计刷出 $19,978 \sim 19,994$ 条墓碑；
-     - 尾部活跃代驻留墓碑为 $6 \sim 22$ 条；
+     - 每次 Flush 刷出 512–514 条墓碑，累计刷出 19,978–19,994 条墓碑；
+     - 尾部活跃代驻留墓碑为 **6–22 条**（具体逐 Rep 为：Rep 1: 22 条，Rep 2: 6 条，Rep 3: 19 条，Rep 4: 11 条，Rep 5: 18 条，均值 15.2 条）；
      - 求和严格等于 **20,000**（PASS，无一差错）；
    - **AMTV-T512 (5 轮)**：
      - 稳定触发 **38 次 Flush**；
-     - 每次 Flush 刷出 $512 \sim 514$ 条墓碑，累计刷出 $19,492 \sim 19,513$ 条墓碑；
-     - 尾部活跃代驻留墓碑为 $487 \sim 508$ 条（逼近 512 阈值）；
+     - 每次 Flush 刷出 512–514 条墓碑，累计刷出 19,492–19,513 条墓碑；
+     - 尾部活跃代驻留墓碑为 **486–508 条**（具体逐 Rep 为：Rep 1: 498 条，Rep 2: 494 条，Rep 3: 508 条，Rep 4: 486 条，Rep 5: 493 条，均值 495.8 条，均逼近 512 阈值）；
      - 求和严格等于 **20,000**（PASS，无一差错）；
 3. **完成窗口归属**：
    - 全部 385 次 Flush 均在 Window 1（前台 Phase B 写入期间）顺利完成，Window 2、Window 3 与 Close 阶段无任何剩余未刷代际。
