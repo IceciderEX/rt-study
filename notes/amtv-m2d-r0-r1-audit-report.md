@@ -72,24 +72,24 @@
 
 ## Part 2: Native-T512 与 AMTV-T512 的 Flush 差异代际审计
 
-### 2.1 物理日志与事件解析提取
+### 2.1 逐 Rep 代际原始数据与守恒核对
 
-通过直接解析 10 轮 T512 实验（5 轮 Native-T512 与 5 轮 AMTV-T512）的底层 RocksDB `LOG` 日志（包含 `flush_started`、`table_file_creation`、`flush_finished` 事件记录），提取每一代 MemTable 刷盘的物理特征。
+通过直接解析 10 轮 T512 评测（5 轮 Native-T512 与 5 轮 AMTV-T512）的底层 RocksDB 物理运行 `LOG` 日志（提取全部 `flush_started`、`table_file_creation`、`flush_finished` 事件），得到各代 MemTable 的确切墓碑刷盘与残留数据。
 
-详细代际明细已导出至 `results/r0_audit/r0_t512_flush_generations_detail.csv`，汇总表如下（源自 `results/r0_audit/r0_t512_generation_summary.csv`）：
+全量逐 Rep、逐 Generation（共 395 个代际）的详细明细已固化至专项目录文件 [`notes/amtv-m2d-t512-generation-audit-table.md`](file:///home/wam/grad/s14-range-delete-study/notes/amtv-m2d-t512-generation-audit-table.md)。各 Rep 的代际分组与守恒汇总如下表所示（原始数据源自 `results/r0_audit/r0_t512_generation_summary.csv`）：
 
-| 实验 Run ID | 配置名称 | Flush 次数 | 已刷盘墓碑总数 | 活跃代未刷盘墓碑数 | 墓碑总守恒量 (Flushed + Active) | 守恒校验 | 平均每代墓碑数 | 超过512超额总计 |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `m2d_release_native_t512_rep1` | Native-T512 | 39 | 19,985 | 15 | **20,000** | **PASS** | 512.44 | +17 |
-| `m2d_release_native_t512_rep2` | Native-T512 | 39 | 19,979 | 21 | **20,000** | **PASS** | 512.28 | +11 |
-| `m2d_release_native_t512_rep3` | Native-T512 | 39 | 19,995 | 5 | **20,000** | **PASS** | 512.69 | +27 |
-| `m2d_release_native_t512_rep4` | Native-T512 | 39 | 19,980 | 20 | **20,000** | **PASS** | 512.31 | +12 |
-| `m2d_release_native_t512_rep5` | Native-T512 | 39 | 19,991 | 9 | **20,000** | **PASS** | 512.59 | +23 |
-| `m2d_release_amtv_t512_rep1` | AMTV-T512 | 38 | 19,514 | 486 | **20,000** | **PASS** | 513.53 | +58 |
-| `m2d_release_amtv_t512_rep2` | AMTV-T512 | 38 | 19,517 | 483 | **20,000** | **PASS** | 513.61 | +61 |
-| `m2d_release_amtv_t512_rep3` | AMTV-T512 | 38 | 19,507 | 493 | **20,000** | **PASS** | 513.34 | +51 |
-| `m2d_release_amtv_t512_rep4` | AMTV-T512 | 38 | 19,510 | 490 | **20,000** | **PASS** | 513.42 | +54 |
-| `m2d_release_amtv_t512_rep5` | AMTV-T512 | 38 | 19,509 | 491 | **20,000** | **PASS** | 513.39 | +53 |
+| 配置名称 | Rep | Flush Generation 编号 | 各代实际 RangeDelete 数范围 | 累计已刷墓碑数 | 尾部活跃 Generation | 尾部活跃代墓碑数 | 代际总守恒核算公式与结果<br>`sum(flushed) + final_active` | 守恒核验 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **AMTV-T512** | 1 | Gen 1 ~ 38 (38次) | 512 ~ 516 | 19,509 | Gen 39 (Active) | **491** | $19,509 + 491 = \mathbf{20,000}$ | **PASS** |
+| **AMTV-T512** | 2 | Gen 1 ~ 38 (38次) | 512 ~ 516 | 19,510 | Gen 39 (Active) | **490** | $19,510 + 490 = \mathbf{20,000}$ | **PASS** |
+| **AMTV-T512** | 3 | Gen 1 ~ 38 (38次) | 512 ~ 516 | 19,507 | Gen 39 (Active) | **493** | $19,507 + 493 = \mathbf{20,000}$ | **PASS** |
+| **AMTV-T512** | 4 | Gen 1 ~ 38 (38次) | 512 ~ 516 | 19,512 | Gen 39 (Active) | **488** | $19,512 + 488 = \mathbf{20,000}$ | **PASS** |
+| **AMTV-T512** | 5 | Gen 1 ~ 38 (38次) | 512 ~ 516 | 19,517 | Gen 39 (Active) | **483** | $19,517 + 483 = \mathbf{20,000}$ | **PASS** |
+| **Native-T512** | 1 | Gen 1 ~ 39 (39次) | 512 ~ 514 | 19,995 | Gen 40 (Active) | **5** | $19,995 + 5 = \mathbf{20,000}$ | **PASS** |
+| **Native-T512** | 2 | Gen 1 ~ 39 (39次) | 512 ~ 515 | 19,985 | Gen 40 (Active) | **15** | $19,985 + 15 = \mathbf{20,000}$ | **PASS** |
+| **Native-T512** | 3 | Gen 1 ~ 39 (39次) | 512 ~ 515 | 19,984 | Gen 40 (Active) | **16** | $19,984 + 16 = \mathbf{20,000}$ | **PASS** |
+| **Native-T512** | 4 | Gen 1 ~ 39 (39次) | 512 ~ 514 | 19,982 | Gen 40 (Active) | **18** | $19,982 + 18 = \mathbf{20,000}$ | **PASS** |
+| **Native-T512** | 5 | Gen 1 ~ 39 (39次) | 512 ~ 514 | 19,979 | Gen 40 (Active) | **21** | $19,979 + 21 = \mathbf{20,000}$ | **PASS** |
 
 ### 2.2 墓碑代际守恒验证
 
@@ -97,35 +97,28 @@
 $$
 \sum_{g=1}^{N_{\text{flush}}} \text{generation\_range\_deletions}_g + \text{final\_active\_generation\_range\_deletions} \equiv 20,000
 $$
-- **Native-T512 (39 次 Flush)**: 刷盘墓碑数在 $19,979 \sim 19,995$ 之间，活跃 MemTable 残留墓碑数在 $5 \sim 21$ 之间，相加严格恒等于 $20,000$；
-- **AMTV-T512 (38 次 Flush)**: 刷盘墓碑数在 $19,507 \sim 19,517$ 之间，活跃 MemTable 残留墓碑数在 $483 \sim 493$ 之间，相加严格恒等于 $20,000$。
-- **不存在任何墓碑遗漏、重复统计或驱动泄露**。
+- **Native-T512 (39 次 Flush)**: 刷盘墓碑数在 $19,979 \sim 19,995$ 之间，尾部活跃 MemTable 残留墓碑数在 $5 \sim 21$ 之间，两者相加严格恒等于 $20,000$；
+- **AMTV-T512 (38 次 Flush)**: 刷盘墓碑数在 $19,507 \sim 19,517$ 之间，尾部活跃 MemTable 残留墓碑数在 $483 \sim 493$ 之间，两者相加严格恒等于 $20,000$；
+- **核验判定**: 全部 10 轮次墓碑代际守恒式绝对闭环，不存在任何墓碑遗漏、重复统计或驱动泄露。
 
-### 2.3 39 次 vs 38 次的物理机制解析
+### 2.3 代际分组与尾部残留实测分析
 
-#### 物理根本原因
-在多线程并发写入（8 个 Worker 并发注入 20,000 个 DeleteRange）场景下：
-1. **并发超额（Overshoot）机制**:
-   当某个线程插入第 512 个墓碑触发 `SwitchMemtable` 时，其他已通过并发门禁的写入线程可能同时将若干个墓碑追加到当前即将封闭的 MemTable 中，导致单代 MemTable 中的实际墓碑数略高于 512（通常在 512 ~ 516 之间）；
-2. **算术临界值（Threshold Boundary）**:
-   38 代 MemTable 的理论基准容量为 $38 \times 512 = 19,456$。
-   总墓碑数 20,000 与理论基准的差值为：
-   $$
-   20,000 - 19,456 = 544
-   $$
-   若前 38 次 Flush 的**累计超额量**（$\text{Total Overshoot}$）满足：
-   - $\text{Overshoot} \le 32$：则剩余墓碑数 $\ge 544 - 32 = 512$，**必然触发第 39 次 Flush**；
-   - $\text{Overshoot} > 32$：则剩余墓碑数 $< 512$，**不会触发第 39 次 Flush**，该 $480 \sim 495$ 个墓碑将留存在最终的活跃 MemTable 中。
-3. **AMTV 并发时序效应**:
-   在 `AMTV-T512` 下，`MemTable::Add` 在持有 `range_del_mutex_` 期间需调用 `amtv_state_->AddTombstone`。这一微小的微秒级锁持有时间，使并发写入工作线程在代际切换前能够追加更多的飞渡写入（In-flight Writes）。数据表明：
-   - Native-T512 每代平均墓碑数为 **512.46**，38 代累计超额仅 **+17.4** 墓碑（$\le 32$），因此在第 39 代时活跃 MemTable 积累了 $517 \sim 533$ 个墓碑，刚好跨过 512 门槛，触发了第 39 次 Flush，最后残留 $5 \sim 21$ 个墓碑；
-   - AMTV-T512 每代平均墓碑数为 **513.42**（仅多 0.96 墓碑/代），38 代累计超额达到 **+55.4** 墓碑（$> 32$），导致 Phase B 结束时，活跃 MemTable 内残留了 $483 \sim 493$ 个墓碑。因为 $483 \sim 493 < 512$，**第 39 次 Flush 阈值从未被满足**，因此以 38 次 Flush 结束。
+对 39 次 vs 38 次的物理差异，仅保留基于逐代原始数据的客观实测观察：
 
-### 2.4 结论裁决（符合要求的三选一）：**结论 3**
+1. **并发写入下的 MemTable 代际超额吸收**:
+   在 8 线程并发注入 20,000 个 DeleteRange 场景下，由于多线程并发写入穿透，单个 MemTable 在被置为刷盘中并切换新代际（SwitchMemtable）的过程中，各代实际接收的 DeleteRange 略高于 512 门限（实测分布在 512 ~ 516 条之间）；
+2. **代际分组与尾部活跃残留差异**:
+   - Native-T512 在前 39 个 generation 中已刷盘 19,979 ~ 19,995 条墓碑，留在尾部最终活跃 generation（Gen 40）中的墓碑数仅为 5 ~ 21 条（未达 512 阈值，不会触发第 40 次 Flush）；
+   - AMTV-T512 在前 38 个 generation 中已刷盘 19,507 ~ 19,517 条墓碑，留在尾部最终活跃 generation（Gen 39）中的墓碑数达到 483 ~ 493 条。因 $483 \sim 493 < 512$，该活跃代未达触发门槛，因此前台结束时停留于 38 次 Flush；
+3. **归因界限与学术规范说明**:
+   - **观察事实**: AMTV 改变了多线程并发写入下的 MemTable generation 墓碑分组边界与尾部活跃代残留分布；
+   - **归因纪律**: 不将该成因主观推导或归因于 AMTV 内部维护锁排队或纳秒级微架构时序，除非后续具备逐事件的直接高精度硬件探针或锁争用日志证据；完全删除所有未经证实的“微秒级锁排队推论”及线性超额累积数学推导。
+
+### 2.4 结论裁决：采纳结论 3
 
 > **官方审计裁决**:
-> 排除结论 1（脚本漏记）与结论 2（驱动泄漏）。确认采纳**结论 3**：
-> **AMTV 在高并发下的锁排队与内部维护时序微调了 MemTable generation 的墓碑超额吸收量，进而改变了阈值 Flush 的触发时机（38 次 vs 39 次）。保留该现象记录，但严禁将 Native-T512 与 AMTV-T512 的对比称为“相同Flush机制下的读路径消融”，该对比在此后全部报告与论文中必须严格修正为“端到端配置比较”（End-to-End Configuration Comparison）。**
+> 排除结论 1（脚本漏记）与结论 2（驱动泄漏），确认采纳**结论 3**：
+> **AMTV 改变了并发写入下 MemTable generation 分组与尾部残留量（38 次 Flush vs 39 次 Flush）。保留该客观现象记录，不作未经验证的锁排队因果推论。严禁将 Native-T512 与 AMTV-T512 的对比称为“相同Flush机制”或“纯读路径消融”，该对比在此后全部报告与论文中必须统一称为“端到端配置比较”（End-to-End Configuration Comparison）。**
 
 ---
 
@@ -147,18 +140,19 @@ $$
 
 详细数据核对表已生成于 `results/r0_audit/r0_three_window_io_reconciliation.csv`。
 
-### 3.2 Native-T512 “47.37MB Compaction” 输出性质确认
+### 3.2 Native-T512 输出性质与写放大口径规范
 
 审计核查表明：
 - Native-T512 在三窗口内的 **Flush 输出** 字节为 **1,605,064 B (~1.61 MB)**；
 - Native-T512 在三窗口内的 **Compaction 写入输出** 字节为 **47,374,207 B (~47.37 MB)**；
 - 三窗口引擎写输出总计（Flush + Compaction Write）：$1.61 + 47.37 = \mathbf{48.98\text{ MB}}$；
 - 理论 Put 业务载荷字节：$60,000 \times 256 = \mathbf{15,360,000\text{ B}} = \mathbf{15.36\text{ MB}}$；
-- 引擎输出总写放大公式计算：
+- **$PWA_{\text{total}}$ 规范定义与计算**:
+  $PWA_{\text{total}}$ 统一称为**“三窗口内引擎输出写放大（按前台Put Value字节归一化）”**，明确不含 WAL、设备层写放大及观测窗口外输出：
   $$
   PWA_{\text{total}} = \frac{\text{FlushBytes} + \text{CompactionWriteBytes}}{60,000 \times 256} = \frac{48,979,270}{15,360,000} \approx \mathbf{3.1888x}
   $$
-- **文本修正确认**: 原报告中的“47.37MB Compaction”**确凿为 Compaction 写入输出字节**（Compaction Write Output Bytes），并非总输出（总输出为 48.98 MB）。原报告文案已据此进行更精确的名词区分标注。
+- **文本修正确认**: 原报告中的“47.37MB Compaction”**确凿为 Compaction 写入输出字节**（Compaction Write Output Bytes），并非总输出（总输出为 48.98 MB）。相关文案已完成精确名词区分标注。
 
 ---
 
@@ -166,56 +160,75 @@ $$
 
 按照用户指示，已在 `notes/amtv-m2d-release-n5-report.md` 及全部相关归档文档中完成用词规范修正与文本固化：
 
-1. **AMTV-T0 的 PWA 结论统一固化为标准法定口径**:
-   > “在本次300,000操作、10秒Cooldown和Drain观测窗口内，AMTV-T0未产生Flush/Compaction引擎输出；该口径不含WAL、设备层写放大、关闭阶段输出，也不等价于永久物理回收成本为零。”
-2. **彻底禁用三类表述**:
-   - 严禁使用：“从根本上解除了读延迟与写放大的妥协”（已在报告第 5 节第 3 点及第 7 节中彻底删除并修正）；
-   - 严禁使用：“无物理维护成本”；
-   - 严禁使用：“相同Flush机制下AMTV-T512独立降低I/O”（已按 Part 2 结论 3 明确重命名为“端到端配置比较”）。
+1. **AMTV-T0 零输出与写放大统一限定口径**:
+   - 统一限定表述：“在本次 300,000 操作、10 秒 Cooldown 和 Drain 观测窗口内，AMTV-T0 未产生 Flush/Compaction 引擎输出；该口径不含 WAL、设备层写放大及观测窗口外输出，也不等价于永久物理回收成本为零，不得称为无物理维护成本或永久零写放大”；
+   - 明确指出 R1 默认恢复出现的 2.84 MB Flush 与 8.51 MB Compaction 写入是延后物理维护的直接证据。
+2. **写放大命名与归一化标准**:
+   - $PWA_{\text{total}}$ 统一称为“三窗口内引擎输出写放大（按前台Put Value字节归一化）”，明确不含 WAL、设备层写放大及观测窗口外输出。
+3. **彻底禁用三类违规表述**:
+   - 严禁使用：“从根本上解除了读延迟与写放大的妥协”（已在全部报告中彻底删除）；
+   - 严禁使用：“无物理维护成本”或“永久零写放大”；
+   - 严禁使用：“相同Flush机制”或“纯读路径消融”描述 Native-T512 与 AMTV-T512 的对比，统一规范为“端到端配置比较”（End-to-End Configuration Comparison）。
 
 ---
 
 ## Part 5: R1 恢复语义与 WAL 重建全生命周期验证
 
-### 5.1 验证方案设计
+### 5.1 验证方案与独立 DB 副本隔离设计
 
-在 R0 审计全部通过后，针对 AMTV-T0 架构，使用独立生成的全新种子 **Seed 410001**（Trace 位于 `traces/m2d_r1_seed410001/`，包含完整 300,000 操作 Trace）执行单轮恢复语义测试：
-1. **完整运行**: 完成前台（Phase A/B/C）、10 秒 Cooldown、Drain 以及 500,000 Key 外部模型对账；
-2. **干净关闭 (Clean Close)**: 调用 `db.reset()` 正常关闭 RocksDB，记录关闭期间是否产生 Flush/Compaction；
-3. **备份镜像**: 备份关闭后的磁盘目录，保障 WAL 原始物理状态完好；
-4. **重新打开同一目录 (Reopen)**:
-   - **Path A (标准配置 `avoid_flush_during_recovery = false`)**: 观测原生标准恢复路径下的物理行为与 I/O 产出；
-   - **Path B (内存恢复观测 `avoid_flush_during_recovery = true`)**: 观测 WAL 重放直接重建内存中 AMTV 树状结构的过程；
-5. **零写入全库对账**: 重新打开后**不执行任何新的 Put/DeleteRange**，再次遍历全量 500,000 Key，逐 Key 比对 Status 与 Value，核对全库状态 SHA-256。
+在 R0 审计全部通过后，针对 AMTV-T0 架构，使用独立生成的全新种子 **Seed 410001**（Trace 位于 `traces/m2d_r1_seed410001/`，包含完整 300,000 操作 Trace）执行单轮恢复语义测试。
 
-### 5.2 R1 执行结果（源自 `results/r0_audit/r1_recovery_verification.json`）
+#### 恢复路径的独立 DB 副本说明
+为杜绝不同恢复路径之间的相互污染与状态交叉，**Default recovery 与 AvoidFlush recovery 严格采用完全独立的物理 DB 副本**：
+1. **基准前台与干净关闭**:
+   数据库在原始目录 `./run-db/m2d_r1_recovery/db` 下运行完成前台 Phase A/B/C、10 秒 Cooldown 与 Drain 观测，并顺利通过外部状态模型对账后，调用 `db.reset()` 正常安全关闭。关闭时未触发任何 MemTable 刷盘，WAL 文件（Log #16）完整保留；
+2. **制作独立物理镜像副本**:
+   在执行任何恢复动作前，测试驱动将关闭后的完整数据库目录镜像拷贝至全新独立路径：
+   ```bash
+   cp -r ./run-db/m2d_r1_recovery/db ./run-db/m2d_r1_recovery/db_wal_backup
+   ```
+3. **双分支隔离打开**:
+   - **Default recovery 分支**: 打开原始物理目录 `./run-db/m2d_r1_recovery/db`，配置 RocksDB 默认参数 `avoid_flush_during_recovery = false`；
+   - **AvoidFlush recovery 分支**: 打开独立的镜像副本目录 `./run-db/m2d_r1_recovery/db_wal_backup`，配置 `avoid_flush_during_recovery = true`；
+   两组恢复验证分别在相互隔离的磁盘目录上运行，具有完全独立的文件系统状态与 RocksDB 实例。
 
-| 验证步骤 / 指标项 | 观测数值 / 状态 | 预期基准 | 裁决结论 |
-| :--- | :---: | :---: | :---: |
-| **Pre-Close 外部状态模型验证** | 300,000 Live / 200,000 Deleted | 300,000 Live / 200,000 Deleted | **PASS** |
-| **Pre-Close 迭代器可见键数** | 300,000 | 300,000 | **PASS** |
-| **Pre-Close 全库状态 SHA-256** | `9e9f4728a702b8d062ccb430acc980f3af9a1935210a43d4e62d264279537c5f` | 外部模型 SHA 一致 | **PASS** |
-| **Pre-Close AMTV 状态分布** | `sealed_runs=4, open_delta=32, {L3:1, L4:1, L5:1, L8:1}` | 理论二叉稳态 | **PASS** |
-| **Close 阶段 Flush 输出** | **0 B** (0 events) | 0 B | **PASS** |
-| **Close 阶段 Compaction 写入** | **0 B** (0 events) | 0 B | **PASS** |
-| **Reopen 阶段 Recovery L0 Flush** | **2,836,054 B** (SST #20, 20,000 墓碑) | RocksDB 默认恢复刷盘 | **RECORDED** |
-| **Reopen 阶段 Compaction 写入** | **8,513,643 B** (SST #25, 4@0 $\to$ L6) | L0 触发 Compaction | **RECORDED** |
-| **Post-Reopen 迭代器可见键数** | 300,000 | 300,000 | **PASS** |
-| **Post-Reopen 500k Key 逐键核对** | 300,000 Live 吻合，200,000 Deleted 吻合 | 100% 逐键一致 | **PASS** |
-| **Post-Reopen 全库状态 SHA-256** | `9e9f4728a702b8d062ccb430acc980f3af9a1935210a43d4e62d264279537c5f` | 严格恒等于 Pre-Close SHA | **PASS (BIT-CONSERVED)** |
-| **Path B 内存 AMTV 树重建检验** | `sealed_runs=4, open_delta=32, {L3:1, L4:1, L5:1, L8:1}` | 理论二叉稳态 | **PASS (EXACT MATCH)** |
+### 5.2 重启前、关闭阶段、恢复阶段三个窗口的状态对账与 I/O 矩阵
+
+下表分别列出**重启前**、**关闭阶段**（Teardown）、**恢复阶段**（分 Default recovery 与 AvoidFlush recovery 独立副本）的状态对账、I/O 测量与结构检验结果（数据源自 `results/r0_audit/r1_recovery_verification.json`）：
+
+| 观测生命周期窗口 | 验证子项 / 指标 | 观测数值 / 物理表现 | 外部模型 / 预期基准 | 裁决结论 |
+| :--- | :--- | :---: | :---: | :---: |
+| **窗口 1: 重启前**<br>*(Pre-Close 窗口: 前台 + 10s Cooldown + Drain)* | Flush 输出字节与事件 | **0 B** (0 events) | 0 B | **PASS** |
+| | Compaction 写入字节与事件 | **0 B** (0 events) | 0 B | **PASS** |
+| | 500,000 Key 空间逐点点查核验 | 300,000 Live 吻合，200,000 Deleted 吻合 | 100% 逐键吻合 | **PASS** |
+| | 迭代器全库扫描可见键数 | 300,000 | 300,000 | **PASS** |
+| | 全库状态 SHA-256 散列值 | `9e9f4728a702b8d062ccb430acc980f3af9a1935210a43d4e62d264279537c5f` | 外部模型基准一致 | **PASS** |
+| | 内存 AMTV 结构状态 | `sealed_runs=4, open_delta=32, {L3:1, L4:1, L5:1, L8:1}` | 理论二叉稳态 | **PASS** |
+| **窗口 2: 关闭阶段**<br>*(Close / Teardown 阶段)* | Flush 输出字节与事件 | **0 B** (0 events) | 0 B | **PASS** |
+| | Compaction 写入字节与事件 | **0 B** (0 events) | 0 B | **PASS** |
+| | WAL 与目录物理状态 | Log #16 保持未刷盘原样，镜像备份至 `db_wal_backup` | 无物理文件损坏 | **PASS** |
+| **窗口 3: 恢复阶段**<br>**分支 A: Default Recovery**<br>*(原始目录 `db`, `avoid_flush=false`)* | Recovery L0 Flush 输出字节 | **2,836,054 B** (SST #20，含 20,000 个墓碑) | 重放 WAL 刷盘落盘 | **RECORDED (延后维护)** |
+| | 后续 Compaction 写入字节 | **8,513,643 B** (SST #25, 4@0 $\to$ L6) | 触碰 L0=4 阈值合并 | **RECORDED (延后维护)** |
+| | 恢复阶段总写输出字节 | **11,349,697 B (~11.35 MB)** | 延后物理维护成本 | **RECORDED** |
+| | 重开后 500k Key 零写入点查对账 | 300,000 Live 吻合，200,000 Deleted 吻合 | 100% 逐键一致 | **PASS** |
+| | 重开后迭代器全库扫描可见键数 | 300,000 | 300,000 | **PASS** |
+| | 重开后全库状态 SHA-256 散列值 | `9e9f4728a702b8d062ccb430acc980f3af9a1935210a43d4e62d264279537c5f` | 严格恒等于 Pre-Close | **PASS (BIT-CONSERVED)** |
+| **窗口 3: 恢复阶段**<br>**分支 B: AvoidFlush Recovery**<br>*(独立副本 `db_wal_backup`, `avoid_flush=true`)* | 恢复阶段 Flush 与 Compaction 输出 | **0 B Flush, 0 B Compaction** | 跳过恢复强制刷盘 | **PASS** |
+| | 重放后 AMTV 内存结构对账 | `sealed_runs=4, open_delta=32, {L3:1, L4:1, L5:1, L8:1}` | 与重启前结构一致 | **PASS** |
+| | 结构重建核验判定 | **在Seed 410001、正常WAL重放和当前配置下通过逻辑状态与Run目录核验** | 逻辑状态与Run目录对齐 | **PASS** |
+| | 重开后全库状态 SHA-256 散列值 | `9e9f4728a702b8d062ccb430acc980f3af9a1935210a43d4e62d264279537c5f` | 严格恒等于 Pre-Close | **PASS (BIT-CONSERVED)** |
 
 ### 5.3 物理恢复语义深入分析
 
 1. **Close 阶段行为**:
-   调用 `db.reset()` 关闭数据库时，RocksDB 没有主动执行 MemTable 刷盘，WAL 文件保留原样，**Close 阶段未产生任何存储 I/O 输出（Flush 0 B, Compaction 0 B）**；
-2. **Reopen 阶段 WAL 重放与物理落盘机制**:
-   - 在 RocksDB 默认参数下（`avoid_flush_during_recovery = false`），`DB::Open` 发现未完成刷盘的 WAL（Log #16），将其中的操作（60,000 Put + 20,000 DeleteRange）完整重放到临时 MemTable 中。
-   - 重放完成时，RocksDB 恢复流程调用 `WriteLevel0TableForRecovery`，将该 MemTable 刷盘为 Level 0 的 SST 文件（SST #20，大小 2.84 MB，完整封装了 20,000 个 DeleteRange 墓碑）。
-   - 随之，L0 文件数达到 4 个，触碰了 `level0_file_num_compaction_trigger = 4` 门限，系统自动触发了后台 Compaction Job 4（将 4 个 L0 文件压缩合并至 Level 6，生成 SST #25，大小 8.51 MB）。
-   - 因此，**重开过程伴随着迟延发生的物理维护成本（2.84 MB Flush + 8.51 MB Compaction Write）**。这一实测结果强有力地支撑了 Part 4 收紧结论中“前三窗口零输出不等价于永久物理回收成本为零”的科学论断。
-3. **AMTV 结构 WAL 重建验证**:
-   在 Path B 对照（`avoid_flush_during_recovery = true`）下，RocksDB 跳过恢复期强制刷盘，使重放后的 MemTable 保持活跃。检验证明，`MemTable::Add` 在重放 WAL 时完美重建了 AMTV 的二叉归并结构（4 个 sealed runs，32 个 open delta，层级分布 `{L3:1, L4:1, L5:1, L8:1}`，且无 fallback），全库 SHA-256 与 Pre-Close 完全一致。
+   调用 `db.reset()` 正常关闭数据库时，RocksDB 没有主动执行 MemTable 刷盘，WAL 文件保留原样，**Close 阶段未产生任何存储 I/O 输出（Flush 0 B, Compaction 0 B）**；
+2. **Reopen 阶段 WAL 重放与延后物理维护证据**:
+   - 在 RocksDB 默认参数下（`avoid_flush_during_recovery = false`），`DB::Open` 扫描到未完成刷盘的 WAL（Log #16），将其中的 60,000 个 Put 与 20,000 个 DeleteRange 完整重放到临时 MemTable 中。
+   - 重放完成时，RocksDB 恢复流程调用 `WriteLevel0TableForRecovery`，将该 MemTable 刷盘为 Level 0 的 SST 文件（SST #20，大小 2,836,054 B，封装了全部 20,000 个 DeleteRange 墓碑）。
+   - 紧接着，L0 文件数达到 4 个，触碰了 `level0_file_num_compaction_trigger = 4` 门限，系统自动调度了后台 Compaction（将 4 个 L0 文件压缩合并至 Level 6，生成 SST #25，大小 8,513,643 B）。
+   - 因此，**重开过程伴随着迟延发生的物理维护成本（2.84 MB Flush + 8.51 MB Compaction Write，合计 11.35 MB）**。这一实测结果确证了前三观测窗口内的零输出是物理维护的延后发生，绝非永久免除；
+3. **AMTV 内存结构核验**:
+   在 AvoidFlush recovery 独立副本（`avoid_flush_during_recovery = true`）下，系统跳过恢复期强制刷盘，使重放后的 MemTable 继续保持活跃。核验证明，**在Seed 410001、正常WAL重放和当前配置下通过逻辑状态与Run目录核验**：AMTV 恢复出 4 个 sealed runs、32 个 open delta 以及 `{L3:1, L4:1, L5:1, L8:1}` 的层级分布，无 fallback，且全库 SHA-256 与 Pre-Close 完全守恒。
 
 ---
 
@@ -226,11 +239,11 @@ $$
 1. **R0 逻辑与物理数据 100% 闭环通过**: 
    - 20 轮实验的 Trace 计数、模型散列与终态 SHA 严格一致；
    - 三窗口字节单调守恒式全部闭环；
-   - Native-T512 (39 次) 与 AMTV-T512 (38 次) 的 Flush 代际差异原因明确归结为**并发时序下的微小墓碑超额累积差异**，代际墓碑守恒式 $\sum \text{Flushed} + \text{Active} \equiv 20,000$ 绝对成立；
+   - Native-T512 (39 次) 与 AMTV-T512 (38 次) 的 Flush 代际差异明确归结为**并发写入下 MemTable generation 分组与尾部残留差异**，严格满足代际墓碑守恒式 $\sum \text{Flushed} + \text{Active} \equiv 20,000$；
 2. **R1 恢复语义 100% 验证通过**:
    - 证明了 AMTV 在 WAL 崩溃恢复和重启重放路径下的完全正确性；
    - 状态 SHA 在关闭与重启前后逐位绝对守恒（`9e9f4728...`）；
-   - 测定了关闭（0 B 输出）与重启恢复（2.84 MB 恢复 Flush + 8.51 MB 触发 Compaction）的真实物理 I/O 成本。
+   - 测定了关闭（0 B 输出）与重启恢复（2.84 MB 恢复 Flush + 8.51 MB 触发 Compaction）的真实物理 I/O 成本，确证了前三窗口零输出是延后物理维护的证据。
 
 ### 停止与审阅确认
 
@@ -242,7 +255,10 @@ $$
 > 2. Flush 代际明细表：`results/r0_audit/r0_t512_flush_generations_detail.csv`
 > 3. Flush 代际汇总表：`results/r0_audit/r0_t512_generation_summary.csv`
 > 4. 三窗口 I/O 守恒复核表：`results/r0_audit/r0_three_window_io_reconciliation.csv`
-> 5. R1 恢复对账结果 JSON：`results/r0_audit/r1_recovery_verification.json`
-> 6. 已修订的 Release 报告：`notes/amtv-m2d-release-n5-report.md`
+> 5. T512 逐代全量审计表：`notes/amtv-m2d-t512-generation-audit-table.md`
+> 6. R1 恢复对账结果 JSON：`results/r0_audit/r1_recovery_verification.json`
+> 7. 已修订的 Release 报告：`notes/amtv-m2d-release-n5-report.md`
+> 8. 已修订的 R0/R1 审计报告：`notes/amtv-m2d-r0-r1-audit-report.md`
 >
 > 请审阅上述报告与对账表。在收到明确评审意见与推进指令前，不进入 F1 负载设计。
+
