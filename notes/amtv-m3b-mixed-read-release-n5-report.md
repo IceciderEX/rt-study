@@ -53,27 +53,28 @@
 
 | 轮次 | Rep | 种子 | 执行配置 | 运行模式 | 物理 CPU 亲和性 | 内存分配策略 |
 |:---:|:---:|:---:|:---|:---:|:---|:---|
-| **1** | 1 | 610001 | **Native-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **2** | 1 | 610001 | **Native-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **3** | 1 | 610001 | **AMTV-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **4** | 1 | 610001 | **AMTV-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **5** | 2 | 620001 | **Native-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **6** | 2 | 620001 | **AMTV-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **7** | 2 | 620001 | **AMTV-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **8** | 2 | 620001 | **Native-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **9** | 3 | 630001 | **AMTV-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **10** | 3 | 630001 | **AMTV-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **11** | 3 | 630001 | **Native-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **12** | 3 | 630001 | **Native-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **13** | 4 | 640001 | **AMTV-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **14** | 4 | 640001 | **Native-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **15** | 4 | 640001 | **Native-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **16** | 4 | 640001 | **AMTV-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **17** | 5 | 650001 | **Native-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **18** | 5 | 650001 | **AMTV-T0** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **19** | 5 | 650001 | **Native-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
-| **20** | 5 | 650001 | **AMTV-T512** | Release | Socket 0 (Cores 0-19) | `numactl --interleave=all` |
+| **1** | 1 | 610001 | **Native-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **2** | 1 | 610001 | **Native-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **3** | 1 | 610001 | **AMTV-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **4** | 1 | 610001 | **AMTV-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **5** | 2 | 620001 | **Native-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **6** | 2 | 620001 | **AMTV-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **7** | 2 | 620001 | **AMTV-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **8** | 2 | 620001 | **Native-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **9** | 3 | 630001 | **AMTV-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **10** | 3 | 630001 | **AMTV-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **11** | 3 | 630001 | **Native-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **12** | 3 | 630001 | **Native-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **13** | 4 | 640001 | **AMTV-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **14** | 4 | 640001 | **Native-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **15** | 4 | 640001 | **Native-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **16** | 4 | 640001 | **AMTV-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **17** | 5 | 650001 | **Native-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **18** | 5 | 650001 | **AMTV-T0** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **19** | 5 | 650001 | **Native-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
+| **20** | 5 | 650001 | **AMTV-T512** | Release | 固定为 [0-19] | `numactl --interleave=all` |
 
+- **运行环境统一规范**：CPU 亲和性固定为 `[0-19]`；内存分配策略为 `numactl --interleave=all`。严禁称为严格 NUMA Node 0 本地内存。
 - **执行纪律**：全流程禁止 `drop_caches`、`sudo`、`sysctl`、sleep、限流、人工 Flush、人工 CompactRange 及 Phase B/C 间等待；20 轮运行总耗时 **451.84 秒**，无一次重试。
 
 ---
@@ -105,7 +106,7 @@
 
 ---
 
-## 4. 逐阶段逐操作详细延迟与有效键开销（Release N=5）
+- **延迟统计口径规范**：此前正文中所有基于 P50 的“提速/加速”统一严格限定为“**中位数层面耗时比（Median Latency Ratio）**”的描述，严禁使用 P50 代替尾延迟结论；各操作全分位延迟详见 [`results/amtv_m3b/audit/m3b_r0_latency_quantiles.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/audit/m3b_r0_latency_quantiles.csv)。
 
 以下数据来自 Release 驱动内部线程局部直方图，在消除所有 Audit 探针后，精确刻画各操作真实硬件开销：
 
@@ -200,7 +201,8 @@
 
 1. **高频 Flush 掩盖了读路径锁冲突**：
    - 在 T512 配置下，每累积 512 条 DeleteRange 即触发一次强制 Flush，活跃 MemTable 中的墓碑数量被截断在 512 条以内，原生活跃物化开销大幅萎缩；
-   - 因此，Native-T512 的 Phase B IOPS 达到 46,831 IOPS，AMTV-T512 为 51,180 IOPS，AMTV-T512 仅带来 **1.10x**（中位数 1.04x）的边际吞吐提升；
+   - 因此，Native-T512 的 Phase B IOPS 达到 46,831 IOPS，AMTV-T512 为 51,180 IOPS，AMTV-T512 仅带来 **1.10x**（中位数 1.04x）的边际吞吐提升，全流程 Overall 吞吐比约为 **1.07x**；
+   - **科学结论收紧界定**：Native-T512 与 AMTV-T512 的约 1.07 倍 Overall 吞吐只能称为 **“N=5 样本下的端到端方向性结果”**；在获得全分位延迟、I/O 及逐 Rep 配对表前，**不得称为稳定优于、显著优于或 Pareto 改善**；
    - 这一现象证明：当系统采用激进的物理维护策略（频繁小文件 Flush）来抑制活跃 MemTable 墓碑累积时，读路径上的点查锁争用不再是全局第一瓶颈。
 
 2. **维护开销的代价转移**：
@@ -218,7 +220,7 @@
 | **全流程 Overall 吞吐比** | **39.67x** | **9.70x (中位数 9.67x)** | 全流程包含 Phase A 基准与 Phase C 静态存活期 |
 | **GetLive P50 (Phase B)** | 9.52 μs | 9.61 μs | AMTV 点查旁路效能完全恒定，未受原生 Scan 干扰 |
 
-- **敏感性结论**：从纯点查转向包含 10% 原生 Scan 的混合读负载时，AMTV-T0 相对 Native-T0 的吞吐加速比从 **50.47 倍**收敛至 **10.99 倍**（中位数 11.03 倍）。这定量证实了：**在未改造 Scan 架构前，原生 Scan 的毫秒级耗时成为系统端到端吞吐的硬性上限**。
+- **敏感性结论与跨测试口径**：从纯点查转向包含 10% 原生 Scan 的混合读负载时，AMTV-T0 相对 Native-T0 的吞吐加速比由纯点查的 ~50 倍收敛至 ~11 倍（中位数 11.03 倍）。**严正界定：M3b 与 M2d 属于完全不同的读负载构成，不能直接计算严格数学意义上的“收益稀释百分比”**，仅作为未优化边界路径（原生 Scan）引入后对系统全局吞吐影响的敏感性对照。这定量证实了：**在未改造 Scan 架构前，原生 Scan 的毫秒级耗时成为系统端到端吞吐的硬性上限**。
 
 ---
 
@@ -275,3 +277,10 @@ Release N=5 的真实硬件数据为是否推进 M1c 提供了决定性的量化
    - T512 逐代 Flush 明细：[`results/amtv_m3b/m3b_release_n5_t512_generations.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/m3b_release_n5_t512_generations.csv)
    - 调度清单：[`results/amtv_m3b/m3b_matrix_manifest.json`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/m3b_matrix_manifest.json)
    - 全部 20 轮原始 JSON：`results/amtv_m3b/raw/m3b_release_*.json`
+5. **M3b-R0 只读审计交付产物**：
+   - 审计正式报告：[`notes/amtv-m3b-r0-release-integrity-audit.md`](file:///home/wam/grad/s14-range-delete-study/notes/amtv-m3b-r0-release-integrity-audit.md)
+   - 20 轮语义与 Trace 审计 CSV：[`results/amtv_m3b/audit/m3b_r0_trace_state.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/audit/m3b_r0_trace_state.csv)
+   - 补齐全分位延迟审计 CSV：[`results/amtv_m3b/audit/m3b_r0_latency_quantiles.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/audit/m3b_r0_latency_quantiles.csv)
+   - 三窗口 I/O 与 PWA 审计 CSV：[`results/amtv_m3b/audit/m3b_r0_three_window_io.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/audit/m3b_r0_three_window_io.csv)
+   - T512 代际墓碑守恒审计 CSV：[`results/amtv_m3b/audit/m3b_r0_t512_generations.csv`](file:///home/wam/grad/s14-range-delete-study/results/amtv_m3b/audit/m3b_r0_t512_generations.csv)
+
