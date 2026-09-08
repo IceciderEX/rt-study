@@ -209,8 +209,8 @@ private:
 };
 
 struct WorkerPhaseAuditSnapshot {
-    rocksdb::ReadPathAuditStats stats[static_cast<size_t>(rocksdb::AuditOpType::kMax)];
 #ifdef ROCKSDB_READ_PATH_AUDIT
+    rocksdb::ReadPathAuditStats stats[static_cast<size_t>(rocksdb::AuditOpType::kMax)];
     rocksdb::AMTVGetProbeStats amtv_get_stats;
 #endif
     uint64_t returned_keys[static_cast<size_t>(rocksdb::AuditOpType::kMax)] = {0};
@@ -476,7 +476,9 @@ int main(int argc, char** argv) {
                     CHECK_INVARIANT(rec.phase_id == phase, "Trace phase mismatch: expected %d, got %u", phase, rec.phase_id);
 
                     if (rec.op_type == 0) { // GetLive
+#ifdef ROCKSDB_READ_PATH_AUDIT
                         rocksdb::AuditOpScope scope(rocksdb::AuditOpType::kGetLive);
+#endif
                         auto op_start = std::chrono::steady_clock::now();
                         std::string val;
                         std::string key = FormatKey(rec.key1);
@@ -493,7 +495,9 @@ int main(int argc, char** argv) {
                         else if (rec.scan_type == 3) op_tag = rocksdb::AuditOpType::kScanNonIntersect;
                         else CHECK_INVARIANT(false, "Unknown scan_type: %u", rec.scan_type);
 
+#ifdef ROCKSDB_READ_PATH_AUDIT
                         rocksdb::AuditOpScope scope(op_tag);
+#endif
                         auto op_start = std::chrono::steady_clock::now();
 
                         std::string start_k = FormatKey(rec.key1);
@@ -522,7 +526,9 @@ int main(int argc, char** argv) {
                         worker_snapshots[w][phase].scan_duration_nanos[tag_idx] += lat_ns;
 
                     } else if (rec.op_type == 2) { // Put
+#ifdef ROCKSDB_READ_PATH_AUDIT
                         rocksdb::AuditOpScope scope(rocksdb::AuditOpType::kPut);
+#endif
                         auto op_start = std::chrono::steady_clock::now();
                         std::string key = FormatKey(rec.key1);
                         std::string val = GeneratePutValue(rec.key1, rec.phase_id, rec.worker_local_op_index, 256);
@@ -533,7 +539,9 @@ int main(int argc, char** argv) {
                         hist_ops[w][phase][static_cast<size_t>(rocksdb::AuditOpType::kPut)].Record(lat_ns);
 
                     } else if (rec.op_type == 3) { // DeleteRange
+#ifdef ROCKSDB_READ_PATH_AUDIT
                         rocksdb::AuditOpScope scope(rocksdb::AuditOpType::kDeleteRange);
+#endif
                         auto op_start = std::chrono::steady_clock::now();
                         std::string k1 = FormatKey(rec.key1);
                         std::string k2 = FormatKey(rec.key2);
@@ -748,13 +756,17 @@ int main(int argc, char** argv) {
         for (size_t op_idx = 1; op_idx < static_cast<size_t>(rocksdb::AuditOpType::kMax); ++op_idx) {
             rocksdb::AuditOpType op_type = static_cast<rocksdb::AuditOpType>(op_idx);
             LatencyHistogram merged_hist;
+#ifdef ROCKSDB_READ_PATH_AUDIT
             rocksdb::ReadPathAuditStats merged_stats;
+#endif
             uint64_t ret_keys = 0;
             uint64_t dur_ns = 0;
 
             for (int w = 0; w < cfg.num_workers; ++w) {
                 merged_hist.MergeFrom(hist_ops[w][p][op_idx]);
+#ifdef ROCKSDB_READ_PATH_AUDIT
                 merged_stats.MergeFrom(worker_snapshots[w][p].stats[op_idx]);
+#endif
                 ret_keys += worker_snapshots[w][p].returned_keys[op_idx];
                 dur_ns += worker_snapshots[w][p].scan_duration_nanos[op_idx];
             }
@@ -774,6 +786,7 @@ int main(int argc, char** argv) {
             m.avg_returned_keys = m.count ? (static_cast<double>(ret_keys) / m.count) : 0.0;
             m.scan_cost_per_key_us = ret_keys ? (dur_ns / 1000.0 / ret_keys) : 0.0;
 
+#ifdef ROCKSDB_READ_PATH_AUDIT
             m.view_materialization_count = merged_stats.range_tombstone_view_materialization_count;
             m.view_materialization_nanos = merged_stats.range_tombstone_view_materialization_nanos;
             m.reader_mutex_attempt_count = merged_stats.fragment_build_lock_attempt_count;
@@ -784,6 +797,7 @@ int main(int argc, char** argv) {
             m.scan_boundary_advance_count = merged_stats.scan_boundary_advance_count;
             m.scan_child_next_count = merged_stats.scan_range_del_child_next_count;
             m.scan_covered_skip_count = merged_stats.scan_covered_skip_count;
+#endif
 
             phase_op_metrics[p].push_back(m);
         }
